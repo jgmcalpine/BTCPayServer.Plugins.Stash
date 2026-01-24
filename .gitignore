@@ -27,6 +27,7 @@ bld/
 
 # Visual Studio 2015 cache/options directory
 .vs/
+.vscode/
 # Uncomment if you have tasks that create the project's static files in wwwroot
 #wwwroot/
 
@@ -79,3 +80,7 @@ artifacts/
 .idea/
 
 *.DotSettings.user
+
+# Local Config
+appsettings.dev.json
+appsettings.Development.json
