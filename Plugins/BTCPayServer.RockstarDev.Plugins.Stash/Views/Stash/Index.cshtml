@@ -1,0 +1,277 @@
+@inject IScopeProvider ScopeProvider
+@using BTCPayServer.Abstractions.Contracts
+@using BTCPayServer.Abstractions.Extensions
+@model StashDashboardViewModel
+@{
+    Layout = "_Layout";
+    var storeId = ScopeProvider.GetCurrentStoreId();
+    ViewData.SetActivePage("Stash", "Stash Dashboard", "Stash");
+    var fiat = Model.Settings?.FiatCurrency ?? "USD";
+}
+
+<div class="sticky-header-setup"></div>
+<div class="sticky-header d-sm-flex align-items-center justify-content-between">
+    <h2 class="my-1">@ViewData["Title"]</h2>
+    <div class="d-flex gap-2 mt-3 mt-sm-0">
+        <a asp-action="Settings" asp-route-storeId="@storeId" class="btn btn-secondary">
+            <i class="fa fa-cog"></i> Settings
+        </a>
+        @if (Model.IsEnabled && Model.PendingCount > 0)
+        {
+            <form asp-action="ResetPendingAllocations" asp-route-storeId="@storeId" method="post" 
+                  onsubmit="return confirm('Are you sure? This will clear all pending allocations without moving any funds. This action cannot be undone.');">
+                <button type="submit" class="btn btn-outline-danger">
+                    <i class="fa fa-stop-circle"></i> Emergency Stop
+                </button>
+            </form>
+        }
+    </div>
+</div>
+
+<partial name="_StatusMessage" />
+
+@if (!Model.IsConfigured || !Model.IsEnabled)
+{
+    <div class="alert alert-info mt-4">
+        <h4 class="alert-heading">Welcome to Stash</h4>
+        <p>
+            Stash helps you automatically set aside a percentage of your Bitcoin income for tax liabilities or cold storage accumulation.
+        </p>
+        <hr>
+        <p class="mb-0">
+            <a asp-action="Settings" asp-route-storeId="@storeId" class="alert-link">
+                Configure Stash Settings
+            </a> to get started.
+        </p>
+    </div>
+}
+else
+{
+    <!-- Status Cards -->
+    <div class="row mt-4">
+        <!-- Pending Stash Card -->
+        <div class="col-md-6 col-lg-4 mb-4">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h5 class="mb-0">Pending Stash</h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <span class="text-muted">Sats</span>
+                        <span class="h4 mb-0">@Model.PendingSats.ToString("N0")</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <span class="text-muted">Current Value</span>
+                        <span class="h5 mb-0">@Model.CurrentFiatValue.ToString("N2") @fiat</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="text-muted">Allocations</span>
+                        <span>@Model.PendingCount</span>
+                    </div>
+                    <hr>
+                    <!-- Threshold Progress -->
+                    <div class="mb-2">
+                        <div class="d-flex justify-content-between">
+                            <small>Threshold Progress</small>
+                            <small>@Model.ThresholdPercentage.ToString("N1")%</small>
+                        </div>
+                        <div class="progress" style="height: 20px;">
+                            <div class="progress-bar @(Model.ThresholdMet ? "bg-success" : "bg-primary")" 
+                                 role="progressbar" 
+                                 style="width: @Math.Min(Model.ThresholdPercentage, 100)%">
+                            </div>
+                        </div>
+                        <small class="text-muted">
+                            Target: @Model.Settings!.BatchThresholdFiat.ToString("N2") @fiat
+                        </small>
+                    </div>
+                    @if (Model.ThresholdMet)
+                    {
+                        <div class="alert alert-success mt-3 mb-0">
+                            <i class="fa fa-check-circle"></i> Threshold met! Batch ready for execution.
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- Configuration Card -->
+        <div class="col-md-6 col-lg-4 mb-4">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h5 class="mb-0">Configuration</h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-flex justify-content-between mb-2">
+                        <span class="text-muted">Allocation</span>
+                        <span>@Model.Settings!.AllocationPercentage%</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span class="text-muted">Threshold</span>
+                        <span>@Model.Settings.BatchThresholdFiat.ToString("N2") @fiat</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span class="text-muted">Destination</span>
+                        <span>@(Model.Settings.DestinationType == StashDestinationType.ColdStorage ? "Cold Storage" : "Liquid Swap")</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span class="text-muted">Min Batch</span>
+                        <span>@Model.Settings.MinimumBatchSats.ToString("N0") sats</span>
+                    </div>
+                    @if (!string.IsNullOrEmpty(Model.Settings.DestinationAddress))
+                    {
+                        <hr>
+                        <div>
+                            <small class="text-muted">Destination Address:</small>
+                            <div class="text-break small mt-1">
+                                @Model.Settings.DestinationAddress.Substring(0, Math.Min(20, Model.Settings.DestinationAddress.Length))...
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- Lifetime Stats Card -->
+        <div class="col-md-6 col-lg-4 mb-4">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h5 class="mb-0">All-Time Stats</h5>
+                </div>
+                <div class="card-body">
+                    @if (Model.LifetimeStats != null)
+                    {
+                        <div class="d-flex justify-content-between mb-2">
+                            <span class="text-muted">Total Batches</span>
+                            <span>@Model.LifetimeStats.TotalBatches</span>
+                        </div>
+                        <div class="d-flex justify-content-between mb-2">
+                            <span class="text-muted">Total Stashed</span>
+                            <span>@Model.LifetimeStats.TotalSatsStashed.ToString("N0") sats</span>
+                        </div>
+                        <div class="d-flex justify-content-between mb-2">
+                            <span class="text-muted">Fiat Value</span>
+                            <span>@Model.LifetimeStats.TotalFiatStashed.ToString("N2") @fiat</span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span class="text-muted">Fees Paid</span>
+                            <span>@Model.LifetimeStats.TotalFeesPaid.ToString("N0") sats</span>
+                        </div>
+                    }
+                    else
+                    {
+                        <p class="text-muted mb-0">No batches executed yet.</p>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="btn-group">
+                <a asp-action="Batches" asp-route-storeId="@storeId" class="btn btn-outline-primary">
+                    <i class="fa fa-history"></i> Batch History
+                </a>
+                <a asp-action="Allocations" asp-route-storeId="@storeId" class="btn btn-outline-primary">
+                    <i class="fa fa-list"></i> All Allocations
+                </a>
+                <a asp-action="ExportCsv" asp-route-storeId="@storeId" class="btn btn-outline-primary">
+                    <i class="fa fa-download"></i> Export CSV
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Activity -->
+    @if (Model.RecentBatches.Any())
+    {
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Recent Batches</h5>
+                <a asp-action="Batches" asp-route-storeId="@storeId" class="btn btn-sm btn-link">View All</a>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Type</th>
+                            <th>Amount</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var batch in Model.RecentBatches)
+                        {
+                            <tr>
+                                <td>@batch.InitiatedAt.ToBrowserDate()</td>
+                                <td>
+                                    <span class="badge @(batch.ExecutionType == BatchExecutionType.ColdStorage ? "bg-info" : "bg-warning")">
+                                        @(batch.ExecutionType == BatchExecutionType.ColdStorage ? "Cold Storage" : "Liquid Swap")
+                                    </span>
+                                </td>
+                                <td>@batch.NetSats.ToString("N0") sats</td>
+                                <td>
+                                    <span class="badge @(batch.Status == BatchStatus.Completed ? "bg-success" : batch.Status == BatchStatus.Failed ? "bg-danger" : "bg-secondary")">
+                                        @batch.Status
+                                    </span>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    @if (Model.RecentAllocations.Any())
+    {
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Recent Allocations</h5>
+                <a asp-action="Allocations" asp-route-storeId="@storeId" class="btn btn-sm btn-link">View All</a>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Invoice</th>
+                            <th>Allocated</th>
+                            <th>Value</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var alloc in Model.RecentAllocations)
+                        {
+                            <tr>
+                                <td>@alloc.SettledAt.ToBrowserDate()</td>
+                                <td>
+                                    <a href="/invoices/@alloc.InvoiceId" target="_blank">
+                                        @alloc.InvoiceId.Substring(0, Math.Min(8, alloc.InvoiceId.Length))...
+                                    </a>
+                                </td>
+                                <td>@alloc.AllocatedSats.ToString("N0") sats</td>
+                                <td>@alloc.FiatValueAtReceipt.ToString("N2") @alloc.FiatCurrency</td>
+                                <td>
+                                    @if (alloc.IsExecuted)
+                                    {
+                                        <span class="badge bg-success">Executed</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-warning">Pending</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+}
+
