@@ -1,4 +1,5 @@
 #nullable enable
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using BTCPayServer.Plugins.Stash.Data.Models;
 
@@ -20,15 +21,19 @@ public class StashSettingsViewModel
     public decimal BatchThresholdFiat { get; set; } = 100.0m;
 
     [Display(Name = "Fiat Currency")]
-    [StringLength(10)]
+    [Required(ErrorMessage = "Currency is required")]
     public string FiatCurrency { get; set; } = "USD";
 
     [Display(Name = "Destination Type")]
     public StashDestinationType DestinationType { get; set; } = StashDestinationType.ColdStorage;
 
-    [Display(Name = "Destination Address")]
+    [Display(Name = "Bitcoin Destination Address")]
     [StringLength(500)]
     public string? DestinationAddress { get; set; }
+
+    [Display(Name = "Liquid Destination Address")]
+    [StringLength(500)]
+    public string? LiquidAddress { get; set; }
 
     [Display(Name = "Minimum Batch Size (sats)")]
     [Range(1000, 100000000, ErrorMessage = "Minimum must be at least 1000 sats")]
@@ -41,6 +46,11 @@ public class StashSettingsViewModel
     [Display(Name = "Use Tor for API calls")]
     public bool UseTor { get; set; } = true;
 
+    /// <summary>
+    /// Supported fiat currencies for threshold calculations.
+    /// </summary>
+    public static IReadOnlyList<string> SupportedCurrencies => new[] { "USD" };
+
     public static StashSettingsViewModel FromModel(StashSettings settings)
     {
         return new StashSettingsViewModel
@@ -52,6 +62,7 @@ public class StashSettingsViewModel
             FiatCurrency = settings.FiatCurrency,
             DestinationType = settings.DestinationType,
             DestinationAddress = settings.DestinationAddress,
+            LiquidAddress = settings.LiquidAddress,
             MinimumBatchSats = settings.MinimumBatchSats,
             FeeBlockTarget = settings.FeeBlockTarget,
             UseTor = settings.UseTor
@@ -70,6 +81,7 @@ public class StashSettingsViewModel
             FiatCurrency = FiatCurrency,
             DestinationType = DestinationType,
             DestinationAddress = DestinationAddress,
+            LiquidAddress = LiquidAddress,
             MinimumBatchSats = MinimumBatchSats,
             FeeBlockTarget = FeeBlockTarget,
             UseTor = UseTor

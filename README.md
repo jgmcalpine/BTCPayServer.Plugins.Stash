@@ -65,13 +65,13 @@ When threshold is met, executes one of two actions:
 | Setting | Description |
 |---------|-------------|
 | **Enabled** | Enable/disable Stash for this store |
-| **Allocation Percentage** | Percentage of each payment to allocate (1-100%) |
-| **Fiat Currency** | Currency for threshold calculations (USD, EUR, etc.) |
+| **Allocation Percentage** | Percentage of each payment to allocate (0-100%) |
+| **Fiat Currency** | Currency for threshold calculations (currently USD only) |
 | **Batch Threshold** | Fiat amount threshold to trigger batch execution |
 | **Minimum Batch Size** | Minimum sats to include in a batch (prevents tiny batches) |
 | **Destination Type** | Cold Storage (on-chain) or Liquid Swap (Boltz) |
-| **Destination Address** | Bitcoin address or XPUB for cold storage |
-| **Boltz API URL** | API endpoint for Liquid swaps |
+| **Bitcoin Destination Address** | Bitcoin address or XPUB for cold storage sweeps (required for Cold Storage mode) |
+| **Liquid Destination Address** | Liquid network address for USDT (required for Liquid Swap mode) |
 
 ## CSV Export Format
 
@@ -85,7 +85,8 @@ Date,Sent Amount,Sent Currency,Received Amount,Received Currency,Fee Amount,Fee 
 
 ## Security Considerations
 
-- **Address Validation**: Strict regex validation for Bitcoin (mainnet/testnet) and Liquid addresses
+- **Address Validation**: Strict regex validation for Bitcoin (mainnet/testnet), XPUB, and Liquid addresses. Invalid addresses are rejected with helpful error messages.
+- **Currency Restriction**: Only USD is currently supported for fiat threshold calculations to ensure compatibility with rate providers.
 - **Privacy**: Supports routing API requests through Tor proxy
 - **Resilience**: Failed swaps retain Virtual Ledger records and alert users
 

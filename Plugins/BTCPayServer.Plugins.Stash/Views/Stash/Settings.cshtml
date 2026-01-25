@@ -20,7 +20,7 @@
 
 <div class="row mt-4">
     <div class="col-xl-8">
-        <form asp-action="Settings" asp-route-storeId="@storeId" method="post" id="SettingsForm">
+        <form asp-action="Settings" asp-controller="Stash" asp-route-storeId="@storeId" method="post" id="SettingsForm">
             
             <!-- Enable Toggle -->
             <div class="card mb-4">
@@ -61,9 +61,16 @@
                         </div>
                         <div class="col-md-6 mb-3">
                             <label asp-for="FiatCurrency" class="form-label"></label>
-                            <input type="text" class="form-control" asp-for="FiatCurrency" 
-                                   placeholder="USD" maxlength="10">
+                            <select class="form-select" asp-for="FiatCurrency">
+                                @foreach (var currency in StashSettingsViewModel.SupportedCurrencies)
+                                {
+                                    <option value="@currency" selected="@(Model.FiatCurrency == currency)">@currency</option>
+                                }
+                            </select>
                             <span asp-validation-for="FiatCurrency" class="text-danger"></span>
+                            <div class="text-muted mt-1">
+                                Currency used for threshold calculations.
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -113,20 +120,20 @@
                     <div class="mb-3">
                         <label asp-for="DestinationType" class="form-label"></label>
                         <select class="form-select" asp-for="DestinationType" id="DestinationType">
-                            <option value="@StashDestinationType.ColdStorage">
+                            <option value="@((int)StashDestinationType.ColdStorage)">
                                 Cold Storage (On-chain sweep - Non-taxable transfer)
                             </option>
-                            <option value="@StashDestinationType.LiquidSwap">
+                            <option value="@((int)StashDestinationType.LiquidSwap)">
                                 Liquid Swap (BTC → USDT via Boltz - Taxable disposal)
                             </option>
                         </select>
                         <span asp-validation-for="DestinationType" class="text-danger"></span>
                     </div>
 
-                    <div id="coldStorageOptions">
+                    <div id="coldStorageOptions" style="display: none;">
                         <div class="mb-3">
                             <label asp-for="DestinationAddress" class="form-label">
-                                Destination Address or XPUB
+                                Bitcoin Destination Address or XPUB
                             </label>
                             <input type="text" class="form-control" asp-for="DestinationAddress" 
                                    placeholder="bc1q... or xpub...">
@@ -150,14 +157,25 @@
                     </div>
 
                     <div id="liquidSwapOptions" style="display: none;">
-                        <div class="alert alert-warning">
+                        <div class="alert alert-warning mb-3">
                             <i class="fa fa-exclamation-triangle"></i>
                             <strong>Tax Implication:</strong> Swapping BTC to USDT is a taxable disposal event. 
                             Stash will record the cost basis for your accounting.
                         </div>
+                        <div class="mb-3">
+                            <label asp-for="LiquidAddress" class="form-label">
+                                Liquid USDT Destination Address
+                            </label>
+                            <input type="text" class="form-control" asp-for="LiquidAddress" 
+                                   placeholder="lq1... or ex1...">
+                            <span asp-validation-for="LiquidAddress" class="text-danger"></span>
+                            <div class="text-muted mt-1">
+                                Liquid address where USDT will be sent after the swap. Must be a valid Liquid network address.
+                            </div>
+                        </div>
                         <div class="alert alert-info">
                             <i class="fa fa-info-circle"></i>
-                            Liquid swap functionality uses the Boltz API. USDT will be sent to your configured Liquid address.
+                            Liquid swap functionality uses the Boltz API.
                         </div>
                     </div>
                 </div>

@@ -54,6 +54,12 @@ public class StashSettings
     public string? DestinationAddress { get; set; }
 
     /// <summary>
+    /// Destination Liquid address for USDT swaps.
+    /// </summary>
+    [MaxLength(500)]
+    public string? LiquidAddress { get; set; }
+
+    /// <summary>
     /// For XPUB destinations: the current derivation index.
     /// </summary>
     public int XpubDerivationIndex { get; set; } = 0;

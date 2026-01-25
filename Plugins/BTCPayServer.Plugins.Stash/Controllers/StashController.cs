@@ -120,13 +120,21 @@ public class StashController(
         if (!ModelState.IsValid)
             return View(model);
 
+        // Validate fiat currency is in supported list
+        if (!StashSettingsViewModel.SupportedCurrencies.Contains(model.FiatCurrency))
+        {
+            ModelState.AddModelError(nameof(model.FiatCurrency), 
+                "Selected currency is not supported.");
+            return View(model);
+        }
+
         // Validate destination address based on type
         if (model.IsEnabled && model.DestinationType == StashDestinationType.ColdStorage)
         {
             if (string.IsNullOrWhiteSpace(model.DestinationAddress))
             {
                 ModelState.AddModelError(nameof(model.DestinationAddress), 
-                    "Destination address is required for cold storage mode.");
+                    "Bitcoin destination address is required for cold storage mode.");
                 return View(model);
             }
 
@@ -141,7 +149,25 @@ public class StashController(
                 !batchExecutionService.ValidateXpub(model.DestinationAddress))
             {
                 ModelState.AddModelError(nameof(model.DestinationAddress), 
-                    "Invalid Bitcoin address or XPUB format.");
+                    "Invalid Bitcoin address or XPUB format. Please enter a valid mainnet (bc1..., 1..., 3...) or testnet (tb1..., bcrt1..., m..., n..., 2...) address, or an extended public key (xpub..., ypub..., zpub...).");
+                return View(model);
+            }
+        }
+
+        // Validate Liquid address for Liquid Swap mode
+        if (model.IsEnabled && model.DestinationType == StashDestinationType.LiquidSwap)
+        {
+            if (string.IsNullOrWhiteSpace(model.LiquidAddress))
+            {
+                ModelState.AddModelError(nameof(model.LiquidAddress), 
+                    "Liquid destination address is required for Liquid swap mode.");
+                return View(model);
+            }
+
+            if (!batchExecutionService.ValidateLiquidAddress(model.LiquidAddress))
+            {
+                ModelState.AddModelError(nameof(model.LiquidAddress), 
+                    "Invalid Liquid address format. Please enter a valid Liquid network address (ex1..., lq1..., or legacy format starting with G, H, V, or W).");
                 return View(model);
             }
         }
