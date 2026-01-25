@@ -3,5 +3,5 @@
 	url = https://github.com/btcpayserver/btcpayserver
 [submodule "submodules/strike-client"]
 	path = submodules/strike-client
-	url = https://github.com/rockstardev/strike-client
+	url = https://github.com/jgmcalpine/strike-client
 	branch = prerelease
