@@ -53,6 +53,7 @@ public class StashSettingsService(PluginDbContextFactory dbContextFactory)
             existing.FiatCurrency = settings.FiatCurrency;
             existing.DestinationType = settings.DestinationType;
             existing.DestinationAddress = settings.DestinationAddress;
+            existing.LiquidAddress = settings.LiquidAddress;
             existing.XpubDerivationIndex = settings.XpubDerivationIndex;
             existing.MinimumBatchSats = settings.MinimumBatchSats;
             existing.FeeBlockTarget = settings.FeeBlockTarget;
