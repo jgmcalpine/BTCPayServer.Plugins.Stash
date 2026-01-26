@@ -29,7 +29,7 @@ jobs:
 
             -   name: Build solution
                 run: |
-                    dotnet build -maxcpucount:1
+                    dotnet build BTCPayServer.Plugins.Stash.sln -maxcpucount:1
 
             -   name: Special commands - Running Config Builder to init plugins
                 run: |
