@@ -212,6 +212,9 @@ public class ThresholdMonitorService(
 
             if (result.IsSuccess)
             {
+                // Mark allocations linked to this batch as executed
+                await allocationService.MarkBatchAllocationsExecutedAsync(batch.Id);
+                
                 logger.LogInformation(
                     "Batch {BatchId} retry succeeded for store {StoreId}",
                     batch.Id, settings.StoreId);
@@ -267,9 +270,9 @@ public class ThresholdMonitorService(
 
             if (result.IsSuccess)
             {
-                // Mark allocations as executed
-                var allocationIds = allocations.Select(a => a.Id).ToList();
-                await allocationService.MarkAllocationsExecutedAsync(allocationIds, batch.Id);
+                // Mark allocations linked to this batch as executed
+                // (allocations are already linked at batch creation time)
+                await allocationService.MarkBatchAllocationsExecutedAsync(batch.Id);
 
                 logger.LogInformation(
                     "Batch {BatchId} executed successfully for store {StoreId}",

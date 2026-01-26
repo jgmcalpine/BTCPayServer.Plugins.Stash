@@ -279,6 +279,8 @@ public class StashController(
 
         if (result.IsSuccess)
         {
+            // Mark allocations linked to this batch as executed
+            await allocationService.MarkBatchAllocationsExecutedAsync(batchId);
             TempData[WellKnownTempData.SuccessMessage] = "Batch retried successfully.";
         }
         else
@@ -384,6 +386,97 @@ public class StashController(
 
         var allocations = await allocationService.GetAllAllocationsAsync(storeId, from, to);
         return View(allocations);
+    }
+
+    /// <summary>
+    /// API endpoint for dashboard stats refresh (AJAX polling).
+    /// </summary>
+    [HttpGet("api/stats")]
+    public async Task<IActionResult> GetStats(string storeId)
+    {
+        if (!await IsDatabaseReadyAsync())
+        {
+            return Json(new { error = "Database not ready" });
+        }
+
+        var settings = await settingsService.GetSettingsAsync(storeId);
+        if (settings == null || !settings.IsEnabled)
+        {
+            return Json(new { enabled = false });
+        }
+
+        var (pendingSats, pendingFiat, pendingCount) = await allocationService.GetPendingTotalsAsync(storeId);
+        var lifetimeStats = await batchExecutionService.GetLifetimeStatsAsync(storeId);
+        var recentBatches = await batchExecutionService.GetBatchHistoryAsync(storeId, 5);
+
+        // Get current exchange rate
+        decimal currentRate = 0;
+        var fiatCurrency = settings.FiatCurrency;
+        try
+        {
+            var store = await storeRepository.FindStore(storeId);
+            if (store != null)
+            {
+                var storeBlob = store.GetStoreBlob();
+                var currencyPair = new CurrencyPair("BTC", fiatCurrency);
+                var rateRules = storeBlob.GetRateRules(defaultRules);
+                var rates = rateFetcher.FetchRates(
+                    new[] { currencyPair }.ToHashSet(), 
+                    rateRules, 
+                    new StoreIdRateContext(storeId), 
+                    default);
+                
+                if (rates.TryGetValue(currencyPair, out var rateTask))
+                {
+                    var rate = await rateTask;
+                    if (rate.BidAsk != null)
+                    {
+                        currentRate = rate.BidAsk.Bid;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Ignore rate fetch errors
+        }
+
+        var currentFiatValue = currentRate > 0
+            ? (pendingSats / 100_000_000m) * currentRate
+            : pendingFiat;
+
+        var thresholdPercentage = settings.BatchThresholdFiat > 0 
+            ? (currentFiatValue / settings.BatchThresholdFiat) * 100 
+            : 0;
+
+        return Json(new
+        {
+            enabled = true,
+            pendingSats,
+            pendingFiat,
+            pendingCount,
+            currentFiatValue,
+            currentRate,
+            fiatCurrency,
+            thresholdPercentage,
+            thresholdMet = thresholdPercentage >= 100,
+            threshold = settings.BatchThresholdFiat,
+            lifetimeStats = new
+            {
+                totalBatches = lifetimeStats.TotalBatches,
+                totalSatsStashed = lifetimeStats.TotalSatsStashed,
+                totalFiatStashed = lifetimeStats.TotalFiatStashed,
+                totalFeesPaid = lifetimeStats.TotalFeesPaid
+            },
+            recentBatches = recentBatches.Select(b => new
+            {
+                id = b.Id,
+                initiatedAt = b.InitiatedAt.ToString("o"),
+                executionType = b.ExecutionType.ToString(),
+                netSats = b.NetSats,
+                status = b.Status.ToString()
+            })
+        });
     }
 
     private async Task<bool> IsDatabaseReadyAsync()

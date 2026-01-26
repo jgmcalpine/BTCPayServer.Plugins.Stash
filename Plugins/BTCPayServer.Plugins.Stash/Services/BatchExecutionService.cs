@@ -162,7 +162,8 @@ public class BatchExecutionService(
     }
 
     /// <summary>
-    /// Creates a new batch execution record.
+    /// Creates a new batch execution record and links allocations to it.
+    /// Allocations are linked immediately (ExecutedBatchId set) but IsExecuted remains false until batch succeeds.
     /// </summary>
     public async Task<ExecutedBatch> CreateBatchAsync(
         string storeId,
@@ -201,9 +202,23 @@ public class BatchExecutionService(
         db.ExecutedBatches.Add(batch);
         await db.SaveChangesAsync();
 
+        // Link allocations to this batch immediately (but don't mark as executed yet)
+        // This ensures we know which allocations belong to this batch even if it fails
+        var allocationIds = allocations.Select(a => a.Id).ToList();
+        var dbAllocations = await db.PendingAllocations
+            .Where(a => allocationIds.Contains(a.Id))
+            .ToListAsync();
+        
+        foreach (var allocation in dbAllocations)
+        {
+            allocation.ExecutedBatchId = batch.Id;
+            // IsExecuted remains false until batch succeeds
+        }
+        await db.SaveChangesAsync();
+
         logger.LogInformation(
-            "Created batch {BatchId} for store {StoreId}: {TotalSats} sats ({FiatValue} {Currency})",
-            batch.Id, storeId, totalSats, fiatValue, fiatCurrency);
+            "Created batch {BatchId} for store {StoreId}: {TotalSats} sats ({FiatValue} {Currency}), linked {Count} allocations",
+            batch.Id, storeId, totalSats, fiatValue, fiatCurrency, dbAllocations.Count);
 
         return batch;
     }

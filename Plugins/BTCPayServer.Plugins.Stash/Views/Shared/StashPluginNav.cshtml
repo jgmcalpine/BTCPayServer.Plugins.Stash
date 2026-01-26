@@ -2,13 +2,15 @@
 @using BTCPayServer.Abstractions.Extensions
 @using BTCPayServer.Client
 @using BTCPayServer.Plugins.Stash.Data
+@using BTCPayServer.Plugins.Stash.Data.Models
 @using Microsoft.EntityFrameworkCore
 @inject IScopeProvider ScopeProvider
 @inject PluginDbContextFactory DbContextFactory
 @{
     var storeId = ScopeProvider.GetCurrentStoreId();
-    var pendingCount = 0;
     var isEnabled = false;
+    var thresholdMet = false;
+    var hasFailedBatch = false;
 
     if (!string.IsNullOrEmpty(storeId))
     {
@@ -21,8 +23,24 @@
             if (settings != null)
             {
                 isEnabled = settings.IsEnabled;
-                pendingCount = await db.PendingAllocations
-                    .CountAsync(a => a.StoreId == storeId && !a.IsExecuted);
+                
+                if (isEnabled)
+                {
+                    // Get pending allocations (not linked to any batch)
+                    var pendingAllocations = await db.PendingAllocations
+                        .Where(a => a.StoreId == storeId && !a.IsExecuted && a.ExecutedBatchId == null)
+                        .ToListAsync();
+                    
+                    // Calculate total fiat value using historical rates
+                    var totalFiatValue = pendingAllocations.Sum(a => a.FiatValueAtReceipt);
+                    
+                    // Check if threshold is met
+                    thresholdMet = totalFiatValue >= settings.BatchThresholdFiat && pendingAllocations.Any();
+                    
+                    // Check for failed batches requiring attention
+                    hasFailedBatch = await db.ExecutedBatches
+                        .AnyAsync(b => b.StoreId == storeId && b.Status == BatchStatus.Failed);
+                }
             }
         }
         catch
@@ -38,28 +56,35 @@
            asp-controller="Stash" asp-action="Index" asp-route-storeId="@storeId"
            class="nav-link @ViewData.ActivePageClass("Stash")">
 
-            <svg class="icon" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <defs>
-                    <style>
-                        .cls-1 {
-                            fill: currentColor;
-                        }
-                    </style>
-                </defs>
+            <!-- Piggy bank with coin icon -->
+            <svg class="icon" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
                 <title>stash</title>
-                <path class="cls-1" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/>
-                <path class="cls-1" d="M12 6c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6zm0 10c-2.21 0-4-1.79-4-4s1.79-4 4-4 4 1.79 4 4-1.79 4-4 4z"/>
-                <circle class="cls-1" cx="12" cy="12" r="2"/>
+                <!-- Piggy bank body -->
+                <path d="M19.5 10.5c-.17 0-.33.02-.49.05C18.67 9.1 17.44 8 16 8c-.26 0-.51.03-.76.08C14.34 6.78 12.76 6 11 6c-3.04 0-5.5 2.46-5.5 5.5 0 .29.03.57.07.85-.91.54-1.57 1.47-1.57 2.65v1c0 1.38.62 2.5 2 2.5h.5v1.5c0 .55.45 1 1 1h1c.55 0 1-.45 1-1V18h6v1.5c0 .55.45 1 1 1h1c.55 0 1-.45 1-1V18h.5c1.38 0 2-1.12 2-2.5v-1c0-2.21-1.79-4-4-4zM9 14c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1z"/>
+                <!-- Coin slot -->
+                <path d="M11 4V2h2v2h-2z"/>
+                <!-- Coin going in (circle with lines) -->
+                <circle cx="12" cy="3" r="1.5" fill="none" stroke="currentColor" stroke-width="0.8"/>
+                <path d="M12 1.5v3M10.5 3h3" stroke="currentColor" stroke-width="0.5"/>
+                <!-- Piggy ear -->
+                <path d="M7 9c-.55 0-1-.45-1-1V7c0-.55.45-1 1-1s1 .45 1 1v1c0 .55-.45 1-1 1z"/>
+                <!-- Legs (front) -->
+                <rect x="6" y="16" width="1.5" height="3" rx="0.5"/>
+                <rect x="14.5" y="16" width="1.5" height="3" rx="0.5"/>
             </svg>
 
             <span>Stash</span>
-            @if (isEnabled && pendingCount > 0)
-            {
-                <span class="badge bg-warning ms-1">@pendingCount</span>
-            }
-            else if (!isEnabled)
+            @if (!isEnabled)
             {
                 <span class="badge bg-secondary ms-1">Off</span>
+            }
+            else if (hasFailedBatch)
+            {
+                <span class="badge bg-danger ms-1" title="Failed batch requires attention">!</span>
+            }
+            else if (thresholdMet)
+            {
+                <span class="badge bg-success ms-1" title="Threshold met - batch ready">✓</span>
             }
         </a>
     </li>

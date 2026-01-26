@@ -58,39 +58,37 @@ else
                 <div class="card-body">
                     <div class="d-flex justify-content-between align-items-center mb-3">
                         <span class="text-muted">Sats</span>
-                        <span class="h4 mb-0">@Model.PendingSats.ToString("N0")</span>
+                        <span class="h4 mb-0" data-stat="pending-sats">@Model.PendingSats.ToString("N0")</span>
                     </div>
                     <div class="d-flex justify-content-between align-items-center mb-3">
                         <span class="text-muted">Current Value</span>
-                        <span class="h5 mb-0">@Model.CurrentFiatValue.ToString("N2") @fiat</span>
+                        <span class="h5 mb-0" data-stat="current-value">@Model.CurrentFiatValue.ToString("N2") @fiat</span>
                     </div>
                     <div class="d-flex justify-content-between align-items-center">
                         <span class="text-muted">Allocations</span>
-                        <span>@Model.PendingCount</span>
+                        <span data-stat="pending-count">@Model.PendingCount</span>
                     </div>
                     <hr>
                     <!-- Threshold Progress -->
                     <div class="mb-2">
                         <div class="d-flex justify-content-between">
                             <small>Threshold Progress</small>
-                            <small>@Model.ThresholdPercentage.ToString("N1")%</small>
+                            <small data-stat="threshold-pct">@Model.ThresholdPercentage.ToString("N1")%</small>
                         </div>
                         <div class="progress" style="height: 20px;">
                             <div class="progress-bar @(Model.ThresholdMet ? "bg-success" : "bg-primary")" 
                                  role="progressbar" 
-                                 style="width: @Math.Min(Model.ThresholdPercentage, 100)%">
+                                 style="width: @Math.Min(Model.ThresholdPercentage, 100)%"
+                                 data-stat="progress-bar">
                             </div>
                         </div>
                         <small class="text-muted">
                             Target: @Model.Settings!.BatchThresholdFiat.ToString("N2") @fiat
                         </small>
                     </div>
-                    @if (Model.ThresholdMet)
-                    {
-                        <div class="alert alert-success mt-3 mb-0">
-                            <i class="fa fa-check-circle"></i> Threshold met! Batch ready for execution.
-                        </div>
-                    }
+                    <div class="alert alert-success mt-3 mb-0" data-stat="threshold-alert" style="display: @(Model.ThresholdMet ? "block" : "none")">
+                        <i class="fa fa-check-circle"></i> Threshold met! Batch ready for execution.
+                    </div>
                 </div>
             </div>
         </div>
@@ -143,19 +141,19 @@ else
                     {
                         <div class="d-flex justify-content-between mb-2">
                             <span class="text-muted">Total Batches</span>
-                            <span>@Model.LifetimeStats.TotalBatches</span>
+                            <span data-stat="total-batches">@Model.LifetimeStats.TotalBatches</span>
                         </div>
                         <div class="d-flex justify-content-between mb-2">
                             <span class="text-muted">Total Stashed</span>
-                            <span>@Model.LifetimeStats.TotalSatsStashed.ToString("N0") sats</span>
+                            <span data-stat="total-stashed">@Model.LifetimeStats.TotalSatsStashed.ToString("N0") sats</span>
                         </div>
                         <div class="d-flex justify-content-between mb-2">
                             <span class="text-muted">Fiat Value</span>
-                            <span>@Model.LifetimeStats.TotalFiatStashed.ToString("N2") @fiat</span>
+                            <span data-stat="total-fiat">@Model.LifetimeStats.TotalFiatStashed.ToString("N2") @fiat</span>
                         </div>
                         <div class="d-flex justify-content-between">
                             <span class="text-muted">Fees Paid</span>
-                            <span>@Model.LifetimeStats.TotalFeesPaid.ToString("N0") sats</span>
+                            <span data-stat="total-fees">@Model.LifetimeStats.TotalFeesPaid.ToString("N0") sats</span>
                         </div>
                     }
                     else
@@ -279,5 +277,72 @@ else
             </div>
         </div>
     }
+    
+    <!-- Auto-refresh stats via AJAX polling -->
+    <script>
+        (function() {
+            const REFRESH_INTERVAL = 30000; // 30 seconds
+            const storeId = '@storeId';
+            
+            function formatNumber(num) {
+                return num.toLocaleString('en-US', { maximumFractionDigits: 0 });
+            }
+            
+            function formatDecimal(num, decimals = 2) {
+                return num.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+            }
+            
+            async function refreshStats() {
+                try {
+                    const response = await fetch(`/plugins/${storeId}/stash/api/stats`);
+                    if (!response.ok) return;
+                    
+                    const data = await response.json();
+                    if (!data.enabled) return;
+                    
+                    // Update pending stash card
+                    const pendingSatsEl = document.querySelector('[data-stat="pending-sats"]');
+                    const currentValueEl = document.querySelector('[data-stat="current-value"]');
+                    const pendingCountEl = document.querySelector('[data-stat="pending-count"]');
+                    const thresholdPctEl = document.querySelector('[data-stat="threshold-pct"]');
+                    const progressBarEl = document.querySelector('[data-stat="progress-bar"]');
+                    const thresholdAlertEl = document.querySelector('[data-stat="threshold-alert"]');
+                    
+                    if (pendingSatsEl) pendingSatsEl.textContent = formatNumber(data.pendingSats);
+                    if (currentValueEl) currentValueEl.textContent = `${formatDecimal(data.currentFiatValue)} ${data.fiatCurrency}`;
+                    if (pendingCountEl) pendingCountEl.textContent = data.pendingCount;
+                    if (thresholdPctEl) thresholdPctEl.textContent = `${formatDecimal(data.thresholdPercentage, 1)}%`;
+                    
+                    if (progressBarEl) {
+                        progressBarEl.style.width = `${Math.min(data.thresholdPercentage, 100)}%`;
+                        progressBarEl.className = `progress-bar ${data.thresholdMet ? 'bg-success' : 'bg-primary'}`;
+                    }
+                    
+                    if (thresholdAlertEl) {
+                        thresholdAlertEl.style.display = data.thresholdMet ? 'block' : 'none';
+                    }
+                    
+                    // Update lifetime stats
+                    const totalBatchesEl = document.querySelector('[data-stat="total-batches"]');
+                    const totalStashedEl = document.querySelector('[data-stat="total-stashed"]');
+                    const totalFiatEl = document.querySelector('[data-stat="total-fiat"]');
+                    const totalFeesEl = document.querySelector('[data-stat="total-fees"]');
+                    
+                    if (data.lifetimeStats) {
+                        if (totalBatchesEl) totalBatchesEl.textContent = data.lifetimeStats.totalBatches;
+                        if (totalStashedEl) totalStashedEl.textContent = `${formatNumber(data.lifetimeStats.totalSatsStashed)} sats`;
+                        if (totalFiatEl) totalFiatEl.textContent = `${formatDecimal(data.lifetimeStats.totalFiatStashed)} ${data.fiatCurrency}`;
+                        if (totalFeesEl) totalFeesEl.textContent = `${formatNumber(data.lifetimeStats.totalFeesPaid)} sats`;
+                    }
+                    
+                } catch (error) {
+                    console.error('Error refreshing stats:', error);
+                }
+            }
+            
+            // Start polling
+            setInterval(refreshStats, REFRESH_INTERVAL);
+        })();
+    </script>
 }
 

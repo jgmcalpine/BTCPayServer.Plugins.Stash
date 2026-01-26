@@ -65,25 +65,27 @@ public class AllocationService(
     }
 
     /// <summary>
-    /// Gets all pending (unexecuted) allocations for a store.
+    /// Gets all pending (unexecuted and not linked to a batch) allocations for a store.
+    /// Allocations linked to a batch (even a failed one) are not included.
     /// </summary>
     public async Task<List<PendingAllocation>> GetPendingAllocationsAsync(string storeId)
     {
         await using var db = dbContextFactory.CreateContext();
         return await db.PendingAllocations
-            .Where(a => a.StoreId == storeId && !a.IsExecuted)
+            .Where(a => a.StoreId == storeId && !a.IsExecuted && a.ExecutedBatchId == null)
             .OrderBy(a => a.SettledAt)
             .ToListAsync();
     }
 
     /// <summary>
     /// Gets the total pending allocation stats for a store.
+    /// Only includes allocations not yet linked to any batch.
     /// </summary>
     public async Task<(long totalSats, decimal totalFiat, int count)> GetPendingTotalsAsync(string storeId)
     {
         await using var db = dbContextFactory.CreateContext();
         var pending = await db.PendingAllocations
-            .Where(a => a.StoreId == storeId && !a.IsExecuted)
+            .Where(a => a.StoreId == storeId && !a.IsExecuted && a.ExecutedBatchId == null)
             .ToListAsync();
 
         return (
@@ -112,6 +114,50 @@ public class AllocationService(
         await db.SaveChangesAsync();
 
         logger.LogInformation("Marked {Count} allocations as executed for batch {BatchId}",
+            allocations.Count, batchId);
+    }
+
+    /// <summary>
+    /// Marks all allocations linked to a batch as executed.
+    /// Used when a batch retry succeeds.
+    /// </summary>
+    public async Task MarkBatchAllocationsExecutedAsync(string batchId)
+    {
+        await using var db = dbContextFactory.CreateContext();
+        var allocations = await db.PendingAllocations
+            .Where(a => a.ExecutedBatchId == batchId && !a.IsExecuted)
+            .ToListAsync();
+
+        foreach (var allocation in allocations)
+        {
+            allocation.IsExecuted = true;
+        }
+
+        await db.SaveChangesAsync();
+
+        logger.LogInformation("Marked {Count} allocations as executed for batch {BatchId} (retry success)",
+            allocations.Count, batchId);
+    }
+
+    /// <summary>
+    /// Unlinks allocations from a failed batch so they can be included in a new batch.
+    /// Used when dismissing/cancelling a failed batch.
+    /// </summary>
+    public async Task UnlinkAllocationsFromBatchAsync(string batchId)
+    {
+        await using var db = dbContextFactory.CreateContext();
+        var allocations = await db.PendingAllocations
+            .Where(a => a.ExecutedBatchId == batchId && !a.IsExecuted)
+            .ToListAsync();
+
+        foreach (var allocation in allocations)
+        {
+            allocation.ExecutedBatchId = null;
+        }
+
+        await db.SaveChangesAsync();
+
+        logger.LogInformation("Unlinked {Count} allocations from failed batch {BatchId}",
             allocations.Count, batchId);
     }
 
