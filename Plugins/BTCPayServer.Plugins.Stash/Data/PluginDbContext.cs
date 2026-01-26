@@ -14,6 +14,7 @@ public class PluginDbContext : DbContext
     public DbSet<StashSettings> StashSettings { get; set; }
     public DbSet<PendingAllocation> PendingAllocations { get; set; }
     public DbSet<ExecutedBatch> ExecutedBatches { get; set; }
+    public DbSet<BoltzSwap> BoltzSwaps { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -59,6 +60,23 @@ public class PluginDbContext : DbContext
             entity.Property(e => e.ExchangeRateAtExecution).HasPrecision(18, 8);
             entity.Property(e => e.WeightedAverageCostBasis).HasPrecision(18, 8);
             entity.Property(e => e.UsdtReceived).HasPrecision(18, 2);
+        });
+
+        // Configure BoltzSwap
+        modelBuilder.Entity<BoltzSwap>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.StoreId);
+            entity.HasIndex(e => e.BatchId);
+            entity.HasIndex(e => e.BoltzSwapId).IsUnique();
+            entity.HasIndex(e => e.State);
+            entity.HasIndex(e => new { e.StoreId, e.State });
+
+            // Configure relationship with batch
+            entity.HasOne(e => e.Batch)
+                .WithMany()
+                .HasForeignKey(e => e.BatchId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
     }
 }

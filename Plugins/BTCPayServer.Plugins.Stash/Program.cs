@@ -30,10 +30,18 @@ public class StashPlugin : BaseBTCPayServerPlugin
         });
         serviceCollection.AddHostedService<PluginMigrationRunner>();
 
+        // Add HTTP client for Boltz API
+        serviceCollection.AddHttpClient("Boltz", client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(30);
+            client.DefaultRequestHeaders.Add("Accept", "application/json");
+        });
+
         // Add services
         serviceCollection.AddSingleton<StashSettingsService>();
         serviceCollection.AddSingleton<AllocationService>();
         serviceCollection.AddSingleton<BatchExecutionService>();
+        serviceCollection.AddSingleton<BoltzApiService>();
 
         // Invoice watcher (listens for settled invoices)
         serviceCollection.AddSingleton<InvoiceWatcherService>();

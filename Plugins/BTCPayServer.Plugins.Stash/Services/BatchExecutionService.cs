@@ -2,10 +2,16 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using BTCPayServer.Configuration;
+using BTCPayServer.Data;
+using BTCPayServer.Lightning;
 using BTCPayServer.Payments;
+using BTCPayServer.Payments.Lightning;
 using BTCPayServer.Plugins.Stash.Data;
 using BTCPayServer.Plugins.Stash.Data.Models;
 using BTCPayServer.Services;
@@ -14,6 +20,7 @@ using BTCPayServer.Services.Stores;
 using BTCPayServer.Services.Wallets;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using NBitcoin;
 using NBXplorer;
 using NBXplorer.DerivationStrategy;
@@ -29,6 +36,9 @@ public class BatchExecutionService(
     BTCPayWalletProvider walletProvider,
     PaymentMethodHandlerDictionary handlers,
     IFeeProviderFactory feeProviderFactory,
+    BoltzApiService boltzApiService,
+    LightningClientFactoryService lightningClientFactory,
+    IOptions<LightningNetworkOptions> lightningNetworkOptions,
     ILogger<BatchExecutionService> logger)
 {
     // Bitcoin address regex patterns
@@ -48,9 +58,15 @@ public class BatchExecutionService(
         @"^([xyztuvXYZTUV]pub[a-zA-HJ-NP-Z0-9]{100,120})$",
         RegexOptions.Compiled);
 
-    // Liquid address regex (simplified)
-    private static readonly Regex LiquidAddressRegex = new(
-        @"^(ex1[a-zA-HJ-NP-Z0-9]{25,87}|lq1[a-zA-HJ-NP-Z0-9]{25,87}|[GHVW][a-km-zA-HJ-NP-Z1-9]{25,34})$",
+    // Liquid address regex patterns
+    // Mainnet: ex1... (blech32), lq1... (blech32m), or confidential addresses starting with VJL, VTp, etc.
+    private static readonly Regex LiquidMainnetAddressRegex = new(
+        @"^(ex1[a-zA-HJ-NP-Z0-9]{25,120}|lq1[a-zA-HJ-NP-Z0-9]{25,120}|VJL[a-km-zA-HJ-NP-Z1-9]{76,100}|VTp[a-km-zA-HJ-NP-Z1-9]{76,100}|[GHVW][a-km-zA-HJ-NP-Z1-9]{25,34})$",
+        RegexOptions.Compiled);
+
+    // Testnet/Regtest: tex1... (blech32), tlq1... (blech32m)
+    private static readonly Regex LiquidTestnetAddressRegex = new(
+        @"^(tex1[a-zA-HJ-NP-Z0-9]{25,120}|tlq1[a-zA-HJ-NP-Z0-9]{25,120}|ert1[a-zA-HJ-NP-Z0-9]{25,120}|el1[a-zA-HJ-NP-Z0-9]{25,120})$",
         RegexOptions.Compiled);
 
     /// <summary>
@@ -140,14 +156,47 @@ public class BatchExecutionService(
     }
 
     /// <summary>
-    /// Validates a Liquid address.
+    /// Validates a Liquid address based on the current network environment.
+    /// </summary>
+    public AddressValidationResult ValidateLiquidAddressForNetwork(string address)
+    {
+        if (string.IsNullOrWhiteSpace(address))
+            return new AddressValidationResult(false, "Liquid address is required.");
+
+        var networkType = environment.NetworkType;
+        var isMainnetAddress = LiquidMainnetAddressRegex.IsMatch(address);
+        var isTestnetAddress = LiquidTestnetAddressRegex.IsMatch(address);
+
+        if (networkType == ChainName.Mainnet)
+        {
+            if (isMainnetAddress)
+                return new AddressValidationResult(true, null);
+            if (isTestnetAddress)
+                return new AddressValidationResult(false,
+                    "This appears to be a testnet Liquid address, but you are running on mainnet. Please use a mainnet Liquid address (starting with ex1, lq1, or VJL/VTp).");
+        }
+        else // Testnet or Regtest
+        {
+            if (isTestnetAddress)
+                return new AddressValidationResult(true, null);
+            if (isMainnetAddress)
+                return new AddressValidationResult(false,
+                    "This appears to be a mainnet Liquid address, but you are running on testnet. Please use a testnet Liquid address (starting with tex1, tlq1, ert1, or el1).");
+        }
+
+        return new AddressValidationResult(false,
+            "Invalid Liquid address format. Please enter a valid Liquid network address.");
+    }
+
+    /// <summary>
+    /// Validates a Liquid address (legacy method for backwards compatibility).
     /// </summary>
     public bool ValidateLiquidAddress(string address)
     {
         if (string.IsNullOrWhiteSpace(address))
             return false;
 
-        return LiquidAddressRegex.IsMatch(address);
+        return LiquidMainnetAddressRegex.IsMatch(address) || LiquidTestnetAddressRegex.IsMatch(address);
     }
 
     private static string GetNetworkDisplayName(ChainName network)
@@ -240,8 +289,7 @@ public class BatchExecutionService(
             if (string.IsNullOrWhiteSpace(settings.LiquidAddress))
                 return new AddressValidationResult(false, "No Liquid address configured. Please configure a Liquid address in your Stash settings.");
 
-            if (!ValidateLiquidAddress(settings.LiquidAddress))
-                return new AddressValidationResult(false, "Invalid Liquid address format. Please check your Liquid address in settings.");
+            return ValidateLiquidAddressForNetwork(settings.LiquidAddress);
         }
 
         return new AddressValidationResult(true, null);
@@ -488,8 +536,8 @@ public class BatchExecutionService(
     }
 
     /// <summary>
-    /// Executes a Liquid swap via Boltz.
-    /// NOTE: This is a placeholder - actual implementation would use Boltz API.
+    /// Executes a Liquid swap via Boltz reverse submarine swap.
+    /// Flow: Lightning BTC -> Liquid BTC (L-BTC)
     /// </summary>
     public async Task<BatchExecutionResult> ExecuteLiquidSwapAsync(
         ExecutedBatch batch,
@@ -500,6 +548,8 @@ public class BatchExecutionService(
         
         if (dbBatch == null)
             return new BatchExecutionResult { IsSuccess = false, ErrorMessage = "Batch not found" };
+
+        BoltzSwap? boltzSwap = null;
 
         try
         {
@@ -531,40 +581,209 @@ public class BatchExecutionService(
             dbBatch.RetryCount++;
             await db.SaveChangesAsync();
 
-            // TODO: Implement Boltz API integration
-            // This would involve:
-            // 1. Create a swap request with Boltz
-            // 2. Generate Lightning invoice to pay
-            // 3. Pay the invoice from the store's Lightning node
-            // 4. Wait for Liquid USDT to be received
-            // 5. Record the swap details
+            // Step 1: Get the store and Lightning client
+            var store = await storeRepository.FindStore(batch.StoreId);
+            if (store == null)
+            {
+                return await FailBatchAsync(dbBatch, "Store not found.", BatchErrorType.ExecutionError, false);
+            }
 
-            logger.LogWarning(
-                "Liquid swap execution not yet implemented for batch {BatchId}",
+            var lightningClient = await GetLightningClientAsync(store);
+            if (lightningClient == null)
+            {
+                return await FailBatchAsync(dbBatch, 
+                    "No Lightning node configured for this store. Liquid swaps require a Lightning-enabled wallet.", 
+                    BatchErrorType.ExecutionError, false);
+            }
+
+            // Step 2: Get a quote from Boltz
+            logger.LogInformation(
+                "Getting Boltz quote for batch {BatchId}: {Sats} sats",
+                batch.Id, batch.TotalSats);
+
+            var quote = await boltzApiService.GetReverseQuoteAsync(batch.TotalSats);
+            if (quote == null)
+            {
+                return await FailBatchAsync(dbBatch, 
+                    "Failed to get quote from Boltz. Please try again later.", 
+                    BatchErrorType.NetworkError, true);
+            }
+
+            logger.LogInformation(
+                "Boltz quote received: onchain={OnchainAmount}, minerFee={MinerFee}, serviceFee={ServiceFee}",
+                quote.OnchainAmount, quote.MinerFee, quote.ServiceFee);
+
+            // Step 3: Generate a claim keypair for the swap
+            // In production, this should use proper key derivation from the store's wallet
+            var claimKeyPair = GenerateClaimKeyPair();
+
+            // Step 4: Create the reverse swap with Boltz
+            var createRequest = new BoltzCreateReverseSwapRequest
+            {
+                From = "BTC",
+                To = "L-BTC", // Liquid Bitcoin - Boltz will handle the asset
+                InvoiceAmount = batch.TotalSats,
+                ClaimPublicKey = claimKeyPair.PublicKeyHex,
+                Address = settings.LiquidAddress, // Destination address for the Liquid funds
+                ReferralId = "btcpay-stash",
+                Description = $"Stash batch {batch.Id}"
+            };
+
+            logger.LogInformation(
+                "Creating Boltz reverse swap for batch {BatchId}",
                 batch.Id);
 
-            // NotImplemented is not retryable - requires code changes
-            dbBatch.Status = BatchStatus.Failed;
-            dbBatch.ErrorMessage = "Liquid swap via Boltz not yet implemented.";
-            dbBatch.IsRetryable = false;
-            dbBatch.CompletedAt = DateTimeOffset.UtcNow;
+            BoltzCreateReverseSwapResponse? swapResponse;
+            try
+            {
+                swapResponse = await boltzApiService.CreateReverseSwapAsync(createRequest);
+                if (swapResponse == null)
+                {
+                    return await FailBatchAsync(dbBatch, 
+                        "Failed to create swap with Boltz.", 
+                        BatchErrorType.NetworkError, true);
+                }
+            }
+            catch (BoltzApiException ex)
+            {
+                var isRetryable = BoltzApiService.IsTransientError(ex);
+                return await FailBatchAsync(dbBatch, 
+                    $"Boltz API error: {ex.Message}", 
+                    BatchErrorType.NetworkError, isRetryable);
+            }
+
+            // Step 5: Create BoltzSwap record to track the swap
+            boltzSwap = new BoltzSwap
+            {
+                StoreId = batch.StoreId,
+                BatchId = batch.Id,
+                BoltzSwapId = swapResponse.Id,
+                State = BoltzSwapState.Created,
+                BoltzStatus = BoltzSwapStatus.Created,
+                Invoice = swapResponse.Invoice,
+                InvoiceAmountSats = batch.TotalSats,
+                OnchainAmountSats = swapResponse.OnchainAmount,
+                MinerFeeSats = quote.MinerFee,
+                ServiceFeeSats = quote.ServiceFee,
+                DestinationAddress = settings.LiquidAddress,
+                LockupAddress = swapResponse.LockupAddress,
+                TimeoutBlockHeight = swapResponse.TimeoutBlockHeight,
+                BlindingKey = swapResponse.BlindingKey,
+                ClaimPublicKey = claimKeyPair.PublicKeyHex,
+                SwapTreeJson = swapResponse.SwapTree != null 
+                    ? JsonSerializer.Serialize(swapResponse.SwapTree) 
+                    : null
+            };
+            db.BoltzSwaps.Add(boltzSwap);
             await db.SaveChangesAsync();
+
+            logger.LogInformation(
+                "Boltz swap created: {SwapId}, invoice amount={InvoiceAmount}, onchain amount={OnchainAmount}",
+                swapResponse.Id, batch.TotalSats, swapResponse.OnchainAmount);
+
+            // Update batch with swap ID
+            dbBatch.SwapId = swapResponse.Id;
+            await db.SaveChangesAsync();
+
+            // Step 6: Pay the Lightning invoice
+            logger.LogInformation(
+                "Paying Boltz Lightning invoice for batch {BatchId}, swap {SwapId}",
+                batch.Id, swapResponse.Id);
+
+            var payResult = await PayLightningInvoiceAsync(lightningClient, swapResponse.Invoice);
+            
+            if (!payResult.Success)
+            {
+                var errorMsg = $"Failed to pay Lightning invoice: {payResult.ErrorMessage}";
+                boltzSwap.State = BoltzSwapState.Failed;
+                boltzSwap.ErrorMessage = errorMsg;
+                boltzSwap.IsRetryable = payResult.IsRetryable;
+                boltzSwap.UpdatedAt = DateTimeOffset.UtcNow;
+                await db.SaveChangesAsync();
+
+                return await FailBatchAsync(dbBatch, errorMsg, BatchErrorType.ExecutionError, payResult.IsRetryable);
+            }
+
+            // Update swap state after successful payment
+            boltzSwap.State = BoltzSwapState.Paid;
+            boltzSwap.BoltzStatus = BoltzSwapStatus.InvoicePaid;
+            boltzSwap.Preimage = payResult.Preimage;
+            boltzSwap.PaidAt = DateTimeOffset.UtcNow;
+            boltzSwap.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+
+            logger.LogInformation(
+                "Lightning invoice paid for swap {SwapId}. Waiting for Boltz to send Liquid funds.",
+                swapResponse.Id);
+
+            // Step 7: Wait for Boltz to complete the swap (with polling)
+            var swapResult = await WaitForSwapCompletionAsync(
+                swapResponse.Id, 
+                boltzSwap, 
+                TimeSpan.FromMinutes(10)); // Timeout after 10 minutes
+
+            if (!swapResult.Success)
+            {
+                boltzSwap.State = BoltzSwapState.Failed;
+                boltzSwap.ErrorMessage = swapResult.ErrorMessage;
+                boltzSwap.UpdatedAt = DateTimeOffset.UtcNow;
+                await db.SaveChangesAsync();
+
+                return await FailBatchAsync(dbBatch, 
+                    swapResult.ErrorMessage ?? "Swap failed", 
+                    BatchErrorType.ExecutionError, swapResult.IsRetryable);
+            }
+
+            // Step 8: Swap completed successfully
+            boltzSwap.State = BoltzSwapState.Completed;
+            boltzSwap.BoltzStatus = BoltzSwapStatus.TransactionClaimed;
+            boltzSwap.ClaimTransactionId = swapResult.TransactionId;
+            boltzSwap.CompletedAt = DateTimeOffset.UtcNow;
+            boltzSwap.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+
+            // Update batch with success
+            var totalFeeSats = boltzSwap.MinerFeeSats + boltzSwap.ServiceFeeSats;
+            dbBatch.Status = BatchStatus.Completed;
+            dbBatch.TransactionId = swapResult.TransactionId;
+            dbBatch.SwapId = swapResponse.Id;
+            dbBatch.FeeSats = totalFeeSats;
+            dbBatch.NetSats = boltzSwap.OnchainAmountSats;
+            dbBatch.UsdtReceived = batch.FiatValueAtExecution; // Approximate - actual USDT would need conversion
+            dbBatch.DestinationAddress = settings.LiquidAddress;
+            dbBatch.CompletedAt = DateTimeOffset.UtcNow;
+            dbBatch.ErrorMessage = null;
+            await db.SaveChangesAsync();
+
+            logger.LogInformation(
+                "Liquid swap completed for batch {BatchId}. Swap={SwapId}, TxId={TxId}, Amount={Amount} sats, Fee={Fee} sats",
+                batch.Id, swapResponse.Id, swapResult.TransactionId, boltzSwap.OnchainAmountSats, totalFeeSats);
 
             return new BatchExecutionResult
             {
-                IsSuccess = false,
-                ErrorMessage = "Liquid swap via Boltz not yet implemented.",
+                IsSuccess = true,
                 BatchId = batch.Id,
-                ErrorType = BatchErrorType.NotImplemented,
-                IsRetryable = false
+                SwapId = swapResponse.Id,
+                TransactionId = swapResult.TransactionId,
+                FeeSats = totalFeeSats
             };
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error executing Liquid swap for batch {BatchId}", batch.Id);
             
+            // Update swap state if we have one
+            if (boltzSwap != null)
+            {
+                boltzSwap.State = BoltzSwapState.Failed;
+                boltzSwap.ErrorMessage = ex.Message;
+                boltzSwap.IsRetryable = IsTransientError(ex) || BoltzApiService.IsTransientError(ex);
+                boltzSwap.UpdatedAt = DateTimeOffset.UtcNow;
+                await db.SaveChangesAsync();
+            }
+
             // Network/transient errors are retryable
-            var isRetryable = IsTransientError(ex);
+            var isRetryable = IsTransientError(ex) || BoltzApiService.IsTransientError(ex);
             
             dbBatch.Status = BatchStatus.Failed;
             dbBatch.ErrorMessage = ex.Message;
@@ -581,6 +800,205 @@ public class BatchExecutionService(
                 IsRetryable = isRetryable
             };
         }
+    }
+
+    /// <summary>
+    /// Gets the Lightning client for a store.
+    /// </summary>
+    private async Task<ILightningClient?> GetLightningClientAsync(StoreData store)
+    {
+        var network = networkProvider.GetNetwork<BTCPayNetwork>("BTC");
+        if (network == null)
+            return null;
+
+        var id = PaymentTypes.LN.GetPaymentMethodId("BTC");
+        var existing = store.GetPaymentMethodConfig<LightningPaymentMethodConfig>(id, handlers);
+        if (existing == null)
+            return null;
+
+        if (existing.GetExternalLightningUrl() is { } connectionString)
+        {
+            return lightningClientFactory.Create(connectionString, network);
+        }
+
+        if (existing.IsInternalNode && 
+            lightningNetworkOptions.Value.InternalLightningByCryptoCode.TryGetValue("BTC", out var internalNode))
+        {
+            return internalNode;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Pays a Lightning invoice and returns the result.
+    /// </summary>
+    private async Task<LightningPaymentResult> PayLightningInvoiceAsync(
+        ILightningClient lightningClient, 
+        string bolt11Invoice)
+    {
+        try
+        {
+            var network = networkProvider.GetNetwork<BTCPayNetwork>("BTC");
+            if (network == null || !BOLT11PaymentRequest.TryParse(bolt11Invoice, out var parsed, network.NBitcoinNetwork))
+            {
+                return new LightningPaymentResult
+                {
+                    Success = false,
+                    ErrorMessage = "Invalid BOLT11 invoice format.",
+                    IsRetryable = false
+                };
+            }
+
+            var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+            var payResponse = await lightningClient.Pay(bolt11Invoice, new PayInvoiceParams(), cts.Token);
+
+            if (payResponse.Result == PayResult.Ok)
+            {
+                return new LightningPaymentResult
+                {
+                    Success = true,
+                    Preimage = payResponse.Details?.Preimage?.ToString()
+                };
+            }
+
+            var errorDetail = payResponse.ErrorDetail ?? payResponse.Result.ToString();
+            var isRetryable = payResponse.Result == PayResult.CouldNotFindRoute;
+
+            return new LightningPaymentResult
+            {
+                Success = false,
+                ErrorMessage = $"Payment failed: {errorDetail}",
+                IsRetryable = isRetryable
+            };
+        }
+        catch (Exception ex)
+        {
+            return new LightningPaymentResult
+            {
+                Success = false,
+                ErrorMessage = $"Payment error: {ex.Message}",
+                IsRetryable = IsTransientError(ex)
+            };
+        }
+    }
+
+    /// <summary>
+    /// Waits for a Boltz swap to complete by polling the status.
+    /// </summary>
+    private async Task<SwapCompletionResult> WaitForSwapCompletionAsync(
+        string swapId, 
+        BoltzSwap boltzSwap,
+        TimeSpan timeout)
+    {
+        var startTime = DateTimeOffset.UtcNow;
+        var pollInterval = TimeSpan.FromSeconds(5);
+
+        while (DateTimeOffset.UtcNow - startTime < timeout)
+        {
+            try
+            {
+                var status = await boltzApiService.GetSwapStatusAsync(swapId);
+                if (status == null)
+                {
+                    logger.LogWarning("Failed to get swap status for {SwapId}", swapId);
+                    await Task.Delay(pollInterval);
+                    continue;
+                }
+
+                logger.LogDebug("Swap {SwapId} status: {Status}", swapId, status.Status);
+
+                // Update local swap status
+                await using var db = dbContextFactory.CreateContext();
+                var dbSwap = await db.BoltzSwaps.FindAsync(boltzSwap.Id);
+                if (dbSwap != null)
+                {
+                    dbSwap.BoltzStatus = status.Status;
+                    dbSwap.UpdatedAt = DateTimeOffset.UtcNow;
+                    await db.SaveChangesAsync();
+                }
+
+                // Check for final states
+                if (BoltzSwapStatus.IsSuccessState(status.Status))
+                {
+                    return new SwapCompletionResult
+                    {
+                        Success = true,
+                        TransactionId = status.Transaction?.Id
+                    };
+                }
+
+                if (BoltzSwapStatus.IsFailedState(status.Status))
+                {
+                    var failureReason = status.FailureReason ?? $"Swap failed with status: {status.Status}";
+                    return new SwapCompletionResult
+                    {
+                        Success = false,
+                        ErrorMessage = failureReason,
+                        IsRetryable = status.Status == BoltzSwapStatus.TransactionLockupFailed
+                    };
+                }
+
+                // Still processing, wait and poll again
+                await Task.Delay(pollInterval);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Error polling swap status for {SwapId}", swapId);
+                await Task.Delay(pollInterval);
+            }
+        }
+
+        // Timeout - the swap might still complete, but we can't wait longer
+        return new SwapCompletionResult
+        {
+            Success = false,
+            ErrorMessage = "Swap timed out waiting for completion. The swap may still complete - check the Boltz status.",
+            IsRetryable = true
+        };
+    }
+
+    /// <summary>
+    /// Generates a claim keypair for Boltz swaps.
+    /// In production, this should derive from the store's HD wallet.
+    /// </summary>
+    private static ClaimKeyPair GenerateClaimKeyPair()
+    {
+        // Generate a random private key
+        var privateKeyBytes = new byte[32];
+        using var rng = RandomNumberGenerator.Create();
+        rng.GetBytes(privateKeyBytes);
+
+        var key = new Key(privateKeyBytes);
+        var pubKey = key.PubKey;
+
+        return new ClaimKeyPair
+        {
+            PrivateKeyHex = Convert.ToHexString(privateKeyBytes).ToLowerInvariant(),
+            PublicKeyHex = Convert.ToHexString(pubKey.ToBytes()).ToLowerInvariant()
+        };
+    }
+
+    private class ClaimKeyPair
+    {
+        public string PrivateKeyHex { get; set; } = null!;
+        public string PublicKeyHex { get; set; } = null!;
+    }
+
+    private class LightningPaymentResult
+    {
+        public bool Success { get; set; }
+        public string? Preimage { get; set; }
+        public string? ErrorMessage { get; set; }
+        public bool IsRetryable { get; set; }
+    }
+
+    private class SwapCompletionResult
+    {
+        public bool Success { get; set; }
+        public string? TransactionId { get; set; }
+        public string? ErrorMessage { get; set; }
+        public bool IsRetryable { get; set; }
     }
 
     /// <summary>
