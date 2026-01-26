@@ -12,9 +12,19 @@
 <div class="sticky-header-setup"></div>
 <div class="sticky-header d-sm-flex align-items-center justify-content-between">
     <h2 class="my-1">Batch @batch.Id.Substring(0, 8)...</h2>
-    <a asp-action="Batches" asp-route-storeId="@storeId" class="btn btn-secondary mt-3 mt-sm-0">
-        <i class="fa fa-arrow-left"></i> Back to History
-    </a>
+    <div class="d-flex gap-2 mt-3 mt-sm-0">
+        @if (Model.CanRetry)
+        {
+            <form asp-action="RetryBatch" asp-route-storeId="@storeId" asp-route-batchId="@batch.Id" method="post" class="d-inline">
+                <button type="submit" class="btn btn-primary" @(Model.HasAddressIssue ? "disabled" : "")>
+                    <i class="fa fa-refresh"></i> Retry Batch
+                </button>
+            </form>
+        }
+        <a asp-action="Batches" asp-route-storeId="@storeId" class="btn btn-secondary">
+            <i class="fa fa-arrow-left"></i> Back to History
+        </a>
+    </div>
 </div>
 
 <partial name="_StatusMessage" />
@@ -133,8 +143,37 @@
         }
         @if (!string.IsNullOrEmpty(batch.ErrorMessage))
         {
-            <div class="alert alert-danger">
-                <strong>Error:</strong> @batch.ErrorMessage
+            <div class="alert alert-danger mb-3">
+                <h5 class="alert-heading"><i class="fa fa-exclamation-triangle"></i> Batch Failed</h5>
+                <p class="mb-2">@batch.ErrorMessage</p>
+                @if (Model.HasAddressIssue)
+                {
+                    <hr>
+                    <p class="mb-2">
+                        <strong>Current Issue:</strong> @Model.CurrentAddressError
+                    </p>
+                    <p class="mb-0">
+                        <a asp-action="Settings" asp-route-storeId="@storeId" class="alert-link">
+                            <i class="fa fa-cog"></i> Update your destination address in Settings
+                        </a>
+                        to fix this issue and retry the batch.
+                    </p>
+                }
+                else if (Model.CanRetry)
+                {
+                    <hr>
+                    <p class="mb-0">
+                        You can attempt to retry this batch using the "Retry Batch" button above.
+                    </p>
+                }
+            </div>
+        }
+        @if (Model.CanRetry && !string.IsNullOrEmpty(Model.NetworkType))
+        {
+            <div class="mb-3">
+                <small class="text-muted">
+                    <i class="fa fa-info-circle"></i> Running on <strong>@Model.NetworkType</strong> network
+                </small>
             </div>
         }
     </div>

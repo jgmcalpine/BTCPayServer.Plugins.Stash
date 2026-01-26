@@ -100,6 +100,16 @@ public class ExecutedBatch
     public string? ErrorMessage { get; set; }
 
     /// <summary>
+    /// Number of retry attempts for this batch.
+    /// </summary>
+    public int RetryCount { get; set; } = 0;
+
+    /// <summary>
+    /// Whether the error is retryable (transient network issues vs permanent errors like invalid address).
+    /// </summary>
+    public bool IsRetryable { get; set; } = true;
+
+    /// <summary>
     /// Number of allocations included in this batch.
     /// </summary>
     public int AllocationCount { get; set; }

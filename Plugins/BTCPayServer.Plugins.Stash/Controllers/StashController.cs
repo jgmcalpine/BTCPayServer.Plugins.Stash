@@ -128,7 +128,7 @@ public class StashController(
             return View(model);
         }
 
-        // Validate destination address based on type
+        // Validate destination address based on type using network-aware validation
         if (model.IsEnabled && model.DestinationType == StashDestinationType.ColdStorage)
         {
             if (string.IsNullOrWhiteSpace(model.DestinationAddress))
@@ -138,18 +138,11 @@ public class StashController(
                 return View(model);
             }
 
-            // Basic address validation
-            var isTestnet = model.DestinationAddress.StartsWith("tb1") || 
-                           model.DestinationAddress.StartsWith("bcrt1") ||
-                           model.DestinationAddress.StartsWith("2") ||
-                           model.DestinationAddress.StartsWith("m") ||
-                           model.DestinationAddress.StartsWith("n");
-            
-            if (!batchExecutionService.ValidateBitcoinAddress(model.DestinationAddress, isTestnet) &&
-                !batchExecutionService.ValidateXpub(model.DestinationAddress))
+            // Use network-aware address validation
+            var addressValidation = batchExecutionService.ValidateBitcoinAddressForNetwork(model.DestinationAddress);
+            if (!addressValidation.IsValid)
             {
-                ModelState.AddModelError(nameof(model.DestinationAddress), 
-                    "Invalid Bitcoin address or XPUB format. Please enter a valid mainnet (bc1..., 1..., 3...) or testnet (tb1..., bcrt1..., m..., n..., 2...) address, or an extended public key (xpub..., ypub..., zpub...).");
+                ModelState.AddModelError(nameof(model.DestinationAddress), addressValidation.ErrorMessage!);
                 return View(model);
             }
         }
@@ -207,13 +200,93 @@ public class StashController(
             return RedirectToAction(nameof(Batches), new { storeId });
         }
 
+        // Check if there's an address validation issue that can be fixed
+        var settings = await settingsService.GetSettingsAsync(storeId);
+        var addressValidation = settings != null 
+            ? batchExecutionService.ValidateDestinationForExecution(settings) 
+            : new Services.AddressValidationResult(false, "Settings not found");
+
         var model = new BatchDetailViewModel
         {
             Batch = batch,
-            Allocations = batch.Allocations
+            Allocations = batch.Allocations,
+            CanRetry = batch.Status == BatchStatus.Failed,
+            HasAddressIssue = batch.Status == BatchStatus.Failed && !addressValidation.IsValid,
+            CurrentAddressError = !addressValidation.IsValid ? addressValidation.ErrorMessage : null,
+            NetworkType = batchExecutionService.NetworkType.ToString()
         };
 
         return View(model);
+    }
+
+    [HttpPost("batches/{batchId}/retry")]
+    public async Task<IActionResult> RetryBatch(string storeId, string batchId)
+    {
+        var batch = await batchExecutionService.GetBatchAsync(batchId);
+        
+        if (batch == null || batch.StoreId != storeId)
+        {
+            TempData[WellKnownTempData.ErrorMessage] = "Batch not found.";
+            return RedirectToAction(nameof(Batches), new { storeId });
+        }
+
+        if (batch.Status != BatchStatus.Failed)
+        {
+            TempData[WellKnownTempData.ErrorMessage] = "Only failed batches can be retried.";
+            return RedirectToAction(nameof(BatchDetail), new { storeId, batchId });
+        }
+
+        // Validate the address before allowing retry
+        var settings = await settingsService.GetSettingsAsync(storeId);
+        if (settings == null)
+        {
+            TempData[WellKnownTempData.ErrorMessage] = "Stash settings not found. Please configure your settings first.";
+            return RedirectToAction(nameof(Settings), new { storeId });
+        }
+
+        var addressValidation = batchExecutionService.ValidateDestinationForExecution(settings);
+        if (!addressValidation.IsValid)
+        {
+            TempData[WellKnownTempData.ErrorMessage] = $"Cannot retry: {addressValidation.ErrorMessage} Please update your settings and try again.";
+            return RedirectToAction(nameof(BatchDetail), new { storeId, batchId });
+        }
+
+        // Reset batch to pending and re-execute
+        var resetSuccess = await batchExecutionService.ResetBatchForRetryAsync(batchId);
+        if (!resetSuccess)
+        {
+            TempData[WellKnownTempData.ErrorMessage] = "Failed to reset batch for retry.";
+            return RedirectToAction(nameof(BatchDetail), new { storeId, batchId });
+        }
+
+        // Execute the batch
+        var updatedBatch = await batchExecutionService.GetBatchAsync(batchId);
+        if (updatedBatch == null)
+        {
+            TempData[WellKnownTempData.ErrorMessage] = "Batch not found after reset.";
+            return RedirectToAction(nameof(Batches), new { storeId });
+        }
+
+        BatchExecutionResult result;
+        if (updatedBatch.ExecutionType == BatchExecutionType.ColdStorage)
+        {
+            result = await batchExecutionService.ExecuteColdStorageSweepAsync(updatedBatch, settings);
+        }
+        else
+        {
+            result = await batchExecutionService.ExecuteLiquidSwapAsync(updatedBatch, settings);
+        }
+
+        if (result.IsSuccess)
+        {
+            TempData[WellKnownTempData.SuccessMessage] = "Batch retried successfully.";
+        }
+        else
+        {
+            TempData[WellKnownTempData.ErrorMessage] = $"Batch retry failed: {result.ErrorMessage}";
+        }
+
+        return RedirectToAction(nameof(BatchDetail), new { storeId, batchId });
     }
 
     [HttpPost("reset")]
@@ -231,40 +304,72 @@ public class StashController(
     }
 
     [HttpGet("export")]
-    public async Task<IActionResult> ExportCsv(string storeId, DateTimeOffset? from, DateTimeOffset? to)
+    public async Task<IActionResult> ExportCsv(string storeId, DateTimeOffset? from, DateTimeOffset? to, string type = "all")
     {
         var settings = await settingsService.GetSettingsAsync(storeId);
-        var batches = await batchExecutionService.GetBatchHistoryAsync(storeId, 1000, from, to);
-
         var fiatCurrency = settings?.FiatCurrency ?? "USD";
         var sb = new StringBuilder();
 
-        // Header - Koinly compatible format
-        sb.AppendLine("Date,Sent Amount,Sent Currency,Received Amount,Received Currency,Fee Amount,Fee Currency,Net Worth Amount,Net Worth Currency,Label,Description,TxHash");
-
-        foreach (var batch in batches.Where(b => b.Status == BatchStatus.Completed))
+        if (type == "batches")
         {
-            var date = batch.CompletedAt?.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) 
-                       ?? batch.InitiatedAt.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
-            var sentAmount = batch.NetSats / 100_000_000m;
-            var feeAmount = batch.FeeSats / 100_000_000m;
-            var netWorth = batch.FiatValueAtExecution;
+            // Export completed batches only (for tax/bookkeeping purposes)
+            var batches = await batchExecutionService.GetBatchHistoryAsync(storeId, 1000, from, to);
+            var completedBatches = batches.Where(b => b.Status == BatchStatus.Completed).ToList();
 
-            if (batch.ExecutionType == BatchExecutionType.LiquidSwap)
+            // Header - Koinly compatible format
+            sb.AppendLine("Date,Type,Sent Amount,Sent Currency,Received Amount,Received Currency,Fee Amount,Fee Currency,Net Worth Amount,Net Worth Currency,Label,Description,TxHash");
+
+            foreach (var batch in completedBatches)
             {
-                // Trade: BTC -> USDT
-                var receivedAmount = batch.UsdtReceived ?? batch.FiatValueAtExecution;
-                sb.AppendLine($"{date},{sentAmount:F8},BTC,{receivedAmount:F2},USDT,{feeAmount:F8},BTC,{netWorth:F2},{fiatCurrency},trade,Stash swap to stablecoin,{batch.SwapId}");
+                var date = batch.CompletedAt?.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) 
+                           ?? batch.InitiatedAt.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+                var sentAmount = batch.NetSats / 100_000_000m;
+                var feeAmount = batch.FeeSats / 100_000_000m;
+                var netWorth = batch.FiatValueAtExecution;
+                var batchType = batch.ExecutionType == BatchExecutionType.ColdStorage ? "Cold Storage" : "Liquid Swap";
+
+                if (batch.ExecutionType == BatchExecutionType.LiquidSwap)
+                {
+                    // Trade: BTC -> USDT
+                    var receivedAmount = batch.UsdtReceived ?? batch.FiatValueAtExecution;
+                    sb.AppendLine($"{date},{batchType},{sentAmount:F8},BTC,{receivedAmount:F2},USDT,{feeAmount:F8},BTC,{netWorth:F2},{fiatCurrency},trade,Stash swap to stablecoin,{batch.SwapId}");
+                }
+                else
+                {
+                    // Transfer: Internal to external (non-taxable)
+                    sb.AppendLine($"{date},{batchType},{sentAmount:F8},BTC,{sentAmount:F8},BTC,{feeAmount:F8},BTC,{netWorth:F2},{fiatCurrency},transfer,Stash cold storage sweep,{batch.TransactionId}");
+                }
             }
-            else
-            {
-                // Transfer: Internal to external (non-taxable)
-                sb.AppendLine($"{date},{sentAmount:F8},BTC,{sentAmount:F8},BTC,{feeAmount:F8},BTC,{netWorth:F2},{fiatCurrency},transfer,Stash cold storage sweep,{batch.TransactionId}");
-            }
+
+            var fileName = $"stash-batches-{storeId}-{DateTime.UtcNow:yyyyMMdd}.csv";
+            return File(Encoding.UTF8.GetBytes(sb.ToString()), "text/csv", fileName);
         }
+        else
+        {
+            // Default: Export all allocations (payments received) - this is the most useful for bookkeeping
+            var allocations = await allocationService.GetAllAllocationsAsync(storeId, from, to);
+            
+            // Koinly-compatible format for income
+            sb.AppendLine("Date,Received Amount,Received Currency,Sent Amount,Sent Currency,Fee Amount,Fee Currency,Net Worth Amount,Net Worth Currency,Label,Description,TxHash");
 
-        var fileName = $"stash-export-{storeId}-{DateTime.UtcNow:yyyyMMdd}.csv";
-        return File(Encoding.UTF8.GetBytes(sb.ToString()), "text/csv", fileName);
+            foreach (var alloc in allocations)
+            {
+                var date = alloc.SettledAt.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+                var receivedBtc = alloc.TotalReceivedSats / 100_000_000m;
+                var allocatedBtc = alloc.AllocatedSats / 100_000_000m;
+                var fiatValue = alloc.FiatValueAtReceipt;
+                var allocationPct = alloc.TotalReceivedSats > 0 
+                    ? (alloc.AllocatedSats * 100m / alloc.TotalReceivedSats).ToString("F1") 
+                    : "0";
+                var status = alloc.IsExecuted ? "Executed" : "Pending";
+                
+                // Record the payment received (income)
+                sb.AppendLine($"{date},{receivedBtc:F8},BTC,,,,,{fiatValue:F2},{alloc.FiatCurrency},income,Payment received ({allocationPct}% stashed - {status}),{alloc.InvoiceId}");
+            }
+
+            var allocFileName = $"stash-payments-{storeId}-{DateTime.UtcNow:yyyyMMdd}.csv";
+            return File(Encoding.UTF8.GetBytes(sb.ToString()), "text/csv", allocFileName);
+        }
     }
 
     [HttpGet("allocations")]

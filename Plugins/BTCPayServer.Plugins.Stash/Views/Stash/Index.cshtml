@@ -177,9 +177,15 @@ else
                 <a asp-action="Allocations" asp-route-storeId="@storeId" class="btn btn-outline-primary">
                     <i class="fa fa-list"></i> All Allocations
                 </a>
-                <a asp-action="ExportCsv" asp-route-storeId="@storeId" class="btn btn-outline-primary">
-                    <i class="fa fa-download"></i> Export CSV
-                </a>
+                <div class="btn-group">
+                    <button type="button" class="btn btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fa fa-download"></i> Export CSV
+                    </button>
+                    <ul class="dropdown-menu">
+                        <li><a class="dropdown-item" asp-action="ExportCsv" asp-route-storeId="@storeId" asp-route-type="all">Export Payments Received</a></li>
+                        <li><a class="dropdown-item" asp-action="ExportCsv" asp-route-storeId="@storeId" asp-route-type="batches">Export Completed Batches</a></li>
+                    </ul>
+                </div>
             </div>
         </div>
     </div>

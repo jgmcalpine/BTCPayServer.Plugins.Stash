@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -67,6 +68,32 @@ public class ThresholdMonitorService(
 
     private async Task CheckAndExecuteThresholdAsync(StashSettings settings, CancellationToken cancellationToken)
     {
+        // First, check for failed batches that need attention
+        var failedBatches = await GetFailedBatchesAsync(settings.StoreId);
+        
+        // Check if there's a non-retryable failed batch - stop processing until user intervenes
+        var nonRetryableBatch = failedBatches.FirstOrDefault(b => !b.IsRetryable || b.RetryCount >= BatchExecutionService.MaxAutoRetries);
+        if (nonRetryableBatch != null)
+        {
+            logger.LogDebug(
+                "Store {StoreId} has a failed batch {BatchId} requiring manual intervention. Skipping automatic execution.",
+                settings.StoreId, nonRetryableBatch.Id);
+            return;
+        }
+
+        // Check for retryable failed batches and retry them
+        var retryableBatch = failedBatches.FirstOrDefault(b => b.IsRetryable && b.RetryCount < BatchExecutionService.MaxAutoRetries);
+        if (retryableBatch != null)
+        {
+            logger.LogInformation(
+                "Retrying failed batch {BatchId} for store {StoreId} (attempt {RetryCount}/{MaxRetries})",
+                retryableBatch.Id, settings.StoreId, retryableBatch.RetryCount + 1, BatchExecutionService.MaxAutoRetries);
+            
+            await RetryBatchAsync(retryableBatch, settings);
+            return;
+        }
+
+        // No failed batches - check for new batch threshold
         var (totalSats, historicalFiat, count) = await allocationService.GetPendingTotalsAsync(settings.StoreId);
 
         if (count == 0 || totalSats == 0)
@@ -132,11 +159,13 @@ public class ThresholdMonitorService(
             return;
         }
 
-        // Check destination is configured
-        if (string.IsNullOrWhiteSpace(settings.DestinationAddress) && 
-            settings.DestinationType == StashDestinationType.ColdStorage)
+        // Check destination is configured and valid for the current network
+        var addressValidation = batchExecutionService.ValidateDestinationForExecution(settings);
+        if (!addressValidation.IsValid)
         {
-            logger.LogWarning("No destination address configured for store {StoreId}", settings.StoreId);
+            logger.LogWarning(
+                "Cannot execute batch for store {StoreId}: {Error}",
+                settings.StoreId, addressValidation.ErrorMessage);
             return;
         }
 
@@ -145,10 +174,62 @@ public class ThresholdMonitorService(
             "Threshold met for store {StoreId}: {CurrentFiat} {Currency} >= {Threshold}. Executing batch.",
             settings.StoreId, currentFiatValue, settings.FiatCurrency, settings.BatchThresholdFiat);
 
-        await ExecuteBatchAsync(settings, currentRate, cancellationToken);
+        await ExecuteBatchAsync(settings, currentRate);
     }
 
-    private async Task ExecuteBatchAsync(StashSettings settings, decimal currentRate, CancellationToken cancellationToken)
+    private async Task<List<ExecutedBatch>> GetFailedBatchesAsync(string storeId)
+    {
+        await using var db = dbContextFactory.CreateContext();
+        return await db.ExecutedBatches
+            .Where(b => b.StoreId == storeId && b.Status == BatchStatus.Failed)
+            .OrderBy(b => b.InitiatedAt)
+            .ToListAsync();
+    }
+
+    private async Task RetryBatchAsync(ExecutedBatch batch, StashSettings settings)
+    {
+        try
+        {
+            // Reset batch status and execute
+            await batchExecutionService.ResetBatchForRetryAsync(batch.Id);
+            var updatedBatch = await batchExecutionService.GetBatchAsync(batch.Id);
+            
+            if (updatedBatch == null)
+            {
+                logger.LogWarning("Could not find batch {BatchId} for retry", batch.Id);
+                return;
+            }
+
+            BatchExecutionResult result;
+            if (updatedBatch.ExecutionType == BatchExecutionType.ColdStorage)
+            {
+                result = await batchExecutionService.ExecuteColdStorageSweepAsync(updatedBatch, settings);
+            }
+            else
+            {
+                result = await batchExecutionService.ExecuteLiquidSwapAsync(updatedBatch, settings);
+            }
+
+            if (result.IsSuccess)
+            {
+                logger.LogInformation(
+                    "Batch {BatchId} retry succeeded for store {StoreId}",
+                    batch.Id, settings.StoreId);
+            }
+            else
+            {
+                logger.LogWarning(
+                    "Batch {BatchId} retry failed for store {StoreId}: {Error} (retryable: {IsRetryable})",
+                    batch.Id, settings.StoreId, result.ErrorMessage, result.IsRetryable);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error retrying batch {BatchId} for store {StoreId}", batch.Id, settings.StoreId);
+        }
+    }
+
+    private async Task ExecuteBatchAsync(StashSettings settings, decimal currentRate)
     {
         try
         {
