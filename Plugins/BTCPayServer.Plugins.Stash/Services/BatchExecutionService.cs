@@ -3,19 +3,32 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
+using BTCPayServer.Payments;
 using BTCPayServer.Plugins.Stash.Data;
 using BTCPayServer.Plugins.Stash.Data.Models;
 using BTCPayServer.Services;
+using BTCPayServer.Services.Invoices;
+using BTCPayServer.Services.Stores;
+using BTCPayServer.Services.Wallets;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using NBitcoin;
+using NBXplorer;
+using NBXplorer.DerivationStrategy;
 
 namespace BTCPayServer.Plugins.Stash.Services;
 
 public class BatchExecutionService(
     PluginDbContextFactory dbContextFactory,
     BTCPayServerEnvironment environment,
+    StoreRepository storeRepository,
+    BTCPayNetworkProvider networkProvider,
+    ExplorerClientProvider explorerClientProvider,
+    BTCPayWalletProvider walletProvider,
+    PaymentMethodHandlerDictionary handlers,
+    IFeeProviderFactory feeProviderFactory,
     ILogger<BatchExecutionService> logger)
 {
     // Bitcoin address regex patterns
@@ -221,7 +234,6 @@ public class BatchExecutionService(
 
     /// <summary>
     /// Executes a cold storage sweep (on-chain transaction).
-    /// NOTE: This is a placeholder - actual implementation would use BTCPay's wallet services.
     /// </summary>
     public async Task<BatchExecutionResult> ExecuteColdStorageSweepAsync(
         ExecutedBatch batch,
@@ -263,33 +275,146 @@ public class BatchExecutionService(
             dbBatch.RetryCount++;
             await db.SaveChangesAsync();
 
-            // TODO: Implement actual on-chain transaction using BTCPay's wallet services
-            // This would involve:
-            // 1. Get the store's wallet
-            // 2. Build a transaction to the destination address
-            // 3. Sign and broadcast the transaction
-            // 4. Record the transaction ID
+            // Get the store and its wallet configuration
+            var store = await storeRepository.FindStore(batch.StoreId);
+            if (store == null)
+            {
+                return await FailBatchAsync(dbBatch, "Store not found.", BatchErrorType.ExecutionError, false);
+            }
 
-            // For now, we'll simulate the execution
-            logger.LogWarning(
-                "Cold storage sweep execution not yet implemented for batch {BatchId}",
-                batch.Id);
+            // Get the BTC network
+            var network = networkProvider.GetNetwork<BTCPayNetwork>("BTC");
+            if (network == null)
+            {
+                return await FailBatchAsync(dbBatch, "Bitcoin network not available.", BatchErrorType.ExecutionError, false);
+            }
 
-            // Placeholder: In a real implementation, this would be the actual transaction
-            // NotImplemented is not retryable - requires code changes
-            dbBatch.Status = BatchStatus.Failed;
-            dbBatch.ErrorMessage = "Cold storage sweep not yet implemented. Manual withdrawal required.";
-            dbBatch.IsRetryable = false;
+            // Get derivation scheme settings (wallet config)
+            var derivationScheme = store.GetDerivationSchemeSettings(handlers, "BTC");
+            if (derivationScheme == null)
+            {
+                return await FailBatchAsync(dbBatch, "No Bitcoin wallet configured for this store. Please set up an on-chain wallet first.", BatchErrorType.ExecutionError, false);
+            }
+
+            // Check if it's a hot wallet (can sign transactions)
+            if (!derivationScheme.IsHotWallet)
+            {
+                return await FailBatchAsync(dbBatch, "Store wallet is not a hot wallet. Cold storage sweep requires a hot wallet that can sign transactions automatically. Please enable hot wallet or manually withdraw funds.", BatchErrorType.ExecutionError, false);
+            }
+
+            // Check if NBXplorer is available
+            if (!explorerClientProvider.IsAvailable("BTC"))
+            {
+                return await FailBatchAsync(dbBatch, "NBXplorer is not available. Please try again later.", BatchErrorType.NetworkError, true);
+            }
+
+            var explorerClient = explorerClientProvider.GetExplorerClient("BTC");
+
+            // Get the account key for signing
+            var extKeyStr = await explorerClient.GetMetadataAsync<string>(
+                derivationScheme.AccountDerivation,
+                WellknownMetadataKeys.AccountHDKey);
+
+            if (string.IsNullOrEmpty(extKeyStr))
+            {
+                return await FailBatchAsync(dbBatch, "Could not retrieve wallet signing key. Ensure the wallet is properly configured as a hot wallet.", BatchErrorType.ExecutionError, false);
+            }
+
+            // Get wallet and UTXOs
+            var wallet = walletProvider.GetWallet("BTC");
+            var utxos = (await wallet.GetUnspentCoins(derivationScheme.AccountDerivation)).ToArray();
+            
+            if (!utxos.Any())
+            {
+                return await FailBatchAsync(dbBatch, "No unspent outputs available in the wallet.", BatchErrorType.InsufficientFunds, false);
+            }
+
+            var coins = utxos.Select(u => u.Coin).ToArray();
+            var totalAvailable = coins.Sum(c => c.Amount.Satoshi);
+
+            // Check if we have enough funds
+            if (totalAvailable < batch.TotalSats)
+            {
+                return await FailBatchAsync(dbBatch, $"Insufficient funds. Available: {totalAvailable} sats, Required: {batch.TotalSats} sats.", BatchErrorType.InsufficientFunds, false);
+            }
+
+            // Parse account key and derive signing keys
+            var accountKey = ExtKey.Parse(extKeyStr, network.NBitcoinNetwork);
+            var keys = utxos.Select(u => accountKey.Derive(u.KeyPath).PrivateKey).ToArray();
+
+            // Get change address
+            var changeAddress = await explorerClient.GetUnusedAsync(
+                derivationScheme.AccountDerivation, DerivationFeature.Change, 0, true);
+
+            // Get fee rate based on settings
+            var feeProvider = feeProviderFactory.CreateFeeProvider(network);
+            var feeRate = await feeProvider.GetFeeRateAsync(Math.Max(settings.FeeBlockTarget, 1));
+
+            // Parse destination address
+            BitcoinAddress destinationAddress;
+            try
+            {
+                destinationAddress = BitcoinAddress.Create(settings.DestinationAddress!, network.NBitcoinNetwork);
+            }
+            catch (Exception ex)
+            {
+                return await FailBatchAsync(dbBatch, $"Invalid destination address: {ex.Message}", BatchErrorType.InvalidAddress, false);
+            }
+
+            // Build the transaction
+            var txBuilder = network.NBitcoinNetwork.CreateTransactionBuilder()
+                .AddCoins(coins)
+                .AddKeys(keys)
+                .Send(destinationAddress, new Money(batch.TotalSats, MoneyUnit.Satoshi))
+                .SetChange(changeAddress.Address)
+                .SendEstimatedFees(feeRate);
+
+            Transaction signedTx;
+            try
+            {
+                signedTx = txBuilder.BuildTransaction(true);
+            }
+            catch (NotEnoughFundsException ex)
+            {
+                return await FailBatchAsync(dbBatch, $"Not enough funds to cover transaction and fees: {ex.Message}", BatchErrorType.InsufficientFunds, false);
+            }
+
+            // Calculate actual fee
+            var fee = signedTx.GetFee(coins);
+            var feeSats = fee?.Satoshi ?? 0;
+            var netSats = batch.TotalSats - feeSats;
+
+            // Broadcast the transaction
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var broadcastResult = await explorerClient.BroadcastAsync(signedTx, cts.Token);
+
+            if (!broadcastResult.Success)
+            {
+                var errorMsg = $"Transaction broadcast failed: {broadcastResult.RPCMessage ?? "Unknown error"}";
+                return await FailBatchAsync(dbBatch, errorMsg, BatchErrorType.NetworkError, true);
+            }
+
+            var txHash = signedTx.GetHash();
+
+            // Update batch with success details
+            dbBatch.Status = BatchStatus.Completed;
+            dbBatch.TransactionId = txHash.ToString();
+            dbBatch.FeeSats = feeSats;
+            dbBatch.NetSats = netSats;
             dbBatch.CompletedAt = DateTimeOffset.UtcNow;
+            dbBatch.ErrorMessage = null;
             await db.SaveChangesAsync();
+
+            logger.LogInformation(
+                "Cold storage sweep completed for batch {BatchId}. TxId: {TxId}, Amount: {Amount} sats, Fee: {Fee} sats",
+                batch.Id, txHash, netSats, feeSats);
 
             return new BatchExecutionResult
             {
-                IsSuccess = false,
-                ErrorMessage = "Cold storage sweep not yet implemented. Please manually withdraw funds.",
+                IsSuccess = true,
                 BatchId = batch.Id,
-                ErrorType = BatchErrorType.NotImplemented,
-                IsRetryable = false
+                TransactionId = txHash.ToString(),
+                FeeSats = feeSats
             };
         }
         catch (Exception ex)
@@ -314,6 +439,37 @@ public class BatchExecutionService(
                 IsRetryable = isRetryable
             };
         }
+    }
+
+    private async Task<BatchExecutionResult> FailBatchAsync(
+        ExecutedBatch batch, 
+        string errorMessage, 
+        BatchErrorType errorType, 
+        bool isRetryable)
+    {
+        await using var db = dbContextFactory.CreateContext();
+        var dbBatch = await db.ExecutedBatches.FindAsync(batch.Id);
+        
+        if (dbBatch != null)
+        {
+            dbBatch.Status = BatchStatus.Failed;
+            dbBatch.ErrorMessage = errorMessage;
+            dbBatch.IsRetryable = isRetryable;
+            dbBatch.CompletedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+        }
+
+        logger.LogWarning("Batch {BatchId} failed: {Error} (retryable: {IsRetryable})", 
+            batch.Id, errorMessage, isRetryable);
+
+        return new BatchExecutionResult
+        {
+            IsSuccess = false,
+            ErrorMessage = errorMessage,
+            BatchId = batch.Id,
+            ErrorType = errorType,
+            IsRetryable = isRetryable
+        };
     }
 
     /// <summary>

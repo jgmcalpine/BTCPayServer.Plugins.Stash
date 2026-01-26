@@ -1,0 +1,115 @@
+@inject IScopeProvider ScopeProvider
+@using BTCPayServer.Abstractions.Contracts
+@using BTCPayServer.Abstractions.Extensions
+@model List<PendingAllocation>
+@{
+    Layout = "_Layout";
+    var storeId = ScopeProvider.GetCurrentStoreId();
+    ViewData.SetActivePage("Stash", "All Allocations", "Stash");
+}
+
+<div class="sticky-header-setup"></div>
+<div class="sticky-header d-sm-flex align-items-center justify-content-between">
+    <h2 class="my-1">@ViewData["Title"]</h2>
+    <a asp-action="Index" asp-route-storeId="@storeId" class="btn btn-primary mt-3 mt-sm-0">
+        <i class="fa fa-arrow-left"></i> Back
+    </a>
+</div>
+
+<partial name="_StatusMessage" />
+
+@if (Model.Any())
+{
+    <div class="table-responsive mt-4">
+        <table class="table table-hover">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Invoice</th>
+                    <th>Payment Method</th>
+                    <th>Total Received</th>
+                    <th>Allocated</th>
+                    <th>Value</th>
+                    <th>Rate</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var alloc in Model)
+                {
+                    <tr>
+                        <td>@alloc.SettledAt.ToBrowserDate()</td>
+                        <td>
+                            <a href="/invoices/@alloc.InvoiceId" target="_blank">
+                                @alloc.InvoiceId.Substring(0, Math.Min(8, alloc.InvoiceId.Length))...
+                            </a>
+                        </td>
+                        <td>
+                            @if (!string.IsNullOrEmpty(alloc.PaymentMethod))
+                            {
+                                <span class="badge bg-secondary">@alloc.PaymentMethod</span>
+                            }
+                        </td>
+                        <td>@alloc.TotalReceivedSats.ToString("N0") sats</td>
+                        <td>@alloc.AllocatedSats.ToString("N0") sats</td>
+                        <td>@alloc.FiatValueAtReceipt.ToString("N2") @alloc.FiatCurrency</td>
+                        <td>@alloc.ExchangeRateAtReceipt.ToString("N0") @alloc.FiatCurrency/BTC</td>
+                        <td>
+                            @if (alloc.IsExecuted)
+                            {
+                                <span class="badge bg-success">Executed</span>
+                                @if (!string.IsNullOrEmpty(alloc.ExecutedBatchId))
+                                {
+                                    <br>
+                                    <small>
+                                        <a asp-action="BatchDetail" asp-route-storeId="@storeId" 
+                                           asp-route-batchId="@alloc.ExecutedBatchId">
+                                            View Batch
+                                        </a>
+                                    </small>
+                                }
+                            }
+                            else
+                            {
+                                <span class="badge bg-warning">Pending</span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    
+    <div class="card mt-4">
+        <div class="card-body">
+            <div class="row text-center">
+                <div class="col-md-3">
+                    <div class="text-muted">Total Allocations</div>
+                    <div class="h4">@Model.Count</div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted">Pending</div>
+                    <div class="h4">@Model.Count(a => !a.IsExecuted)</div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted">Total Allocated</div>
+                    <div class="h4">@Model.Sum(a => a.AllocatedSats).ToString("N0") sats</div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted">Pending Value</div>
+                    <div class="h4">
+                        @Model.Where(a => !a.IsExecuted).Sum(a => a.FiatValueAtReceipt).ToString("N2") 
+                        @(Model.FirstOrDefault()?.FiatCurrency ?? "USD")
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+else
+{
+    <div class="alert alert-info mt-4">
+        <i class="fa fa-info-circle"></i> No allocations found.
+    </div>
+}
+

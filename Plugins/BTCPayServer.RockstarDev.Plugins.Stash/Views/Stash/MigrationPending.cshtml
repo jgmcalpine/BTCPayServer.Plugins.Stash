@@ -1,0 +1,32 @@
+@{
+    ViewData["Title"] = "Stash - Initializing";
+    Layout = "_LayoutWizard";
+}
+
+<div class="text-center p-5">
+    <div class="spinner-border text-primary mb-4" role="status" style="width: 3rem; height: 3rem;">
+        <span class="visually-hidden">Loading...</span>
+    </div>
+    
+    <h2 class="mb-3">Stash Plugin Initializing</h2>
+    
+    <p class="text-muted mb-4">
+        The database is being set up. This usually takes just a few seconds on first run.
+    </p>
+    
+    <p class="text-muted">
+        <small>If this page persists, try refreshing in a few moments or check the server logs.</small>
+    </p>
+    
+    <a href="javascript:location.reload()" class="btn btn-primary mt-3">
+        <span class="fa fa-refresh"></span> Refresh Page
+    </a>
+</div>
+
+<script>
+    // Auto-refresh after 3 seconds
+    setTimeout(function() {
+        location.reload();
+    }, 3000);
+</script>
+

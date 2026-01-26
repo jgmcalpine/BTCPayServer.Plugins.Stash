@@ -316,8 +316,8 @@ public class StashController(
             var batches = await batchExecutionService.GetBatchHistoryAsync(storeId, 1000, from, to);
             var completedBatches = batches.Where(b => b.Status == BatchStatus.Completed).ToList();
 
-            // Header - Koinly compatible format
-            sb.AppendLine("Date,Type,Sent Amount,Sent Currency,Received Amount,Received Currency,Fee Amount,Fee Currency,Net Worth Amount,Net Worth Currency,Label,Description,TxHash");
+            // Header - Koinly compatible format with full details
+            sb.AppendLine("Date,Type,Total Sats,Fee Sats,Net Sats,Sent BTC,Received Amount,Received Currency,Fee BTC,Fiat Value,Fiat Currency,Exchange Rate,Cost Basis,Allocations,Label,Description,TxHash,Destination");
 
             foreach (var batch in completedBatches)
             {
@@ -327,17 +327,18 @@ public class StashController(
                 var feeAmount = batch.FeeSats / 100_000_000m;
                 var netWorth = batch.FiatValueAtExecution;
                 var batchType = batch.ExecutionType == BatchExecutionType.ColdStorage ? "Cold Storage" : "Liquid Swap";
+                var destAddress = batch.DestinationAddress?.Replace(",", "") ?? "";
 
                 if (batch.ExecutionType == BatchExecutionType.LiquidSwap)
                 {
-                    // Trade: BTC -> USDT
+                    // Trade: BTC -> USDT (taxable event)
                     var receivedAmount = batch.UsdtReceived ?? batch.FiatValueAtExecution;
-                    sb.AppendLine($"{date},{batchType},{sentAmount:F8},BTC,{receivedAmount:F2},USDT,{feeAmount:F8},BTC,{netWorth:F2},{fiatCurrency},trade,Stash swap to stablecoin,{batch.SwapId}");
+                    sb.AppendLine($"{date},{batchType},{batch.TotalSats},{batch.FeeSats},{batch.NetSats},{sentAmount:F8},{receivedAmount:F2},USDT,{feeAmount:F8},{netWorth:F2},{fiatCurrency},{batch.ExchangeRateAtExecution:F2},{batch.WeightedAverageCostBasis:F2},{batch.AllocationCount},trade,Stash swap to stablecoin,{batch.SwapId},{destAddress}");
                 }
                 else
                 {
-                    // Transfer: Internal to external (non-taxable)
-                    sb.AppendLine($"{date},{batchType},{sentAmount:F8},BTC,{sentAmount:F8},BTC,{feeAmount:F8},BTC,{netWorth:F2},{fiatCurrency},transfer,Stash cold storage sweep,{batch.TransactionId}");
+                    // Transfer: Internal to external (non-taxable transfer)
+                    sb.AppendLine($"{date},{batchType},{batch.TotalSats},{batch.FeeSats},{batch.NetSats},{sentAmount:F8},{sentAmount:F8},BTC,{feeAmount:F8},{netWorth:F2},{fiatCurrency},{batch.ExchangeRateAtExecution:F2},{batch.WeightedAverageCostBasis:F2},{batch.AllocationCount},transfer,Stash cold storage sweep,{batch.TransactionId},{destAddress}");
                 }
             }
 
@@ -346,11 +347,11 @@ public class StashController(
         }
         else
         {
-            // Default: Export all allocations (payments received) - this is the most useful for bookkeeping
+            // Default: Export all allocations (payments received) - comprehensive for bookkeeping
             var allocations = await allocationService.GetAllAllocationsAsync(storeId, from, to);
             
-            // Koinly-compatible format for income
-            sb.AppendLine("Date,Received Amount,Received Currency,Sent Amount,Sent Currency,Fee Amount,Fee Currency,Net Worth Amount,Net Worth Currency,Label,Description,TxHash");
+            // Comprehensive format with all allocation details
+            sb.AppendLine("Date,Invoice ID,Payment Method,Total Received Sats,Allocated Sats,Allocated BTC,Total Received BTC,Fiat Value,Fiat Currency,Exchange Rate,Allocation %,Status,Batch ID");
 
             foreach (var alloc in allocations)
             {
@@ -359,12 +360,13 @@ public class StashController(
                 var allocatedBtc = alloc.AllocatedSats / 100_000_000m;
                 var fiatValue = alloc.FiatValueAtReceipt;
                 var allocationPct = alloc.TotalReceivedSats > 0 
-                    ? (alloc.AllocatedSats * 100m / alloc.TotalReceivedSats).ToString("F1") 
-                    : "0";
+                    ? (alloc.AllocatedSats * 100m / alloc.TotalReceivedSats) 
+                    : 0m;
                 var status = alloc.IsExecuted ? "Executed" : "Pending";
+                var batchId = alloc.ExecutedBatchId ?? "";
+                var paymentMethod = alloc.PaymentMethod ?? "Unknown";
                 
-                // Record the payment received (income)
-                sb.AppendLine($"{date},{receivedBtc:F8},BTC,,,,,{fiatValue:F2},{alloc.FiatCurrency},income,Payment received ({allocationPct}% stashed - {status}),{alloc.InvoiceId}");
+                sb.AppendLine($"{date},{alloc.InvoiceId},{paymentMethod},{alloc.TotalReceivedSats},{alloc.AllocatedSats},{allocatedBtc:F8},{receivedBtc:F8},{fiatValue:F2},{alloc.FiatCurrency},{alloc.ExchangeRateAtReceipt:F2},{allocationPct:F1},{status},{batchId}");
             }
 
             var allocFileName = $"stash-payments-{storeId}-{DateTime.UtcNow:yyyyMMdd}.csv";
