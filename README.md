@@ -2,6 +2,8 @@
 
 A BTCPay Server plugin for automated financial discipline and treasury management. Stash provides merchants with automated allocation and treasury management capabilities, addressing the volatility risk of accepting Bitcoin by allowing automatic allocation of revenue to specific destinations based on user-defined rules.
 
+Thank you to RockstarDev and the BTCPayServer team for the template and infrastructure to build!
+
 ## Overview
 
 Stash implements a "Virtual Segregation" approach - instead of splitting funds on-chain for every transaction (which is inefficient), it tracks liabilities logically in a database and executes a "Batch Withdrawal" only when it becomes economically viable.
