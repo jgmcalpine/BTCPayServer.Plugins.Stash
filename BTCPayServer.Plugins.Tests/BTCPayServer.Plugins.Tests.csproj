@@ -21,15 +21,24 @@
         </PackageReference>
     </ItemGroup>
 
+    <!-- Disable static web assets for all project references to avoid CI build issues -->
+    <ItemDefinitionGroup>
+        <ProjectReference>
+            <SetConfiguration>Configuration=Release</SetConfiguration>
+        </ProjectReference>
+    </ItemDefinitionGroup>
+
     <ItemGroup>
         <ProjectReference Include="..\submodules\btcpayserver\BTCPayServer\BTCPayServer.csproj">
             <PrivateAssets>all</PrivateAssets>
+            <Properties>StaticWebAssetsEnabled=false</Properties>
         </ProjectReference>
         <ProjectReference Include="..\submodules\btcpayserver\BTCPayServer.Tests\BTCPayServer.Tests.csproj">
             <PrivateAssets>all</PrivateAssets>
         </ProjectReference>
         <ProjectReference Include="..\Plugins\BTCPayServer.Plugins.Stash\BTCPayServer.Plugins.Stash.csproj">
             <PrivateAssets>all</PrivateAssets>
+            <Properties>StaticWebAssetsEnabled=false</Properties>
         </ProjectReference>
     </ItemGroup>
 
