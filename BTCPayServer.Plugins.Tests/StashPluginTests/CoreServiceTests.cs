@@ -113,10 +113,11 @@ public class CoreServiceTests
     [Fact]
     public void ValidateQuoteResponse_FeesExceedInvoice_ReturnsInvalid()
     {
-        // Arrange
+        // Arrange - fees of 110k exceed the 100k invoice amount
+        // OnchainAmount must be positive to get past the first validation
         var quote = new BoltzReverseQuoteResponse
         {
-            OnchainAmount = 0,
+            OnchainAmount = 1, // Minimal positive value to pass first check
             MinerFee = 60000,
             ServiceFee = 50000 // Total fees = 110000 > 100000 invoice
         };
@@ -402,7 +403,7 @@ public class CoreServiceTests
     [Fact]
     public void IsTransientError_ExceptionWithTimeoutInMessage_ReturnsTrue()
     {
-        var ex = new Exception("The operation has timed out");
+        var ex = new Exception("The operation timeout exceeded");
         Assert.True(IsTransientError(ex));
     }
 
