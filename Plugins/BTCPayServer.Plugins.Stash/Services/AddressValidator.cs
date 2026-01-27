@@ -11,7 +11,7 @@ namespace BTCPayServer.Plugins.Stash.Services;
 /// </summary>
 public class AddressValidator : IAddressValidator
 {
-    private readonly BTCPayServerEnvironment _environment;
+    private readonly ChainName _networkType;
 
     // Bitcoin address regex patterns
     private static readonly Regex BtcMainnetAddressRegex = new(
@@ -41,13 +41,25 @@ public class AddressValidator : IAddressValidator
         @"^(tex1[a-zA-HJ-NP-Z0-9]{25,120}|tlq1[a-zA-HJ-NP-Z0-9]{25,120}|ert1[a-zA-HJ-NP-Z0-9]{25,120}|el1[a-zA-HJ-NP-Z0-9]{25,120})$",
         RegexOptions.Compiled);
 
+    /// <summary>
+    /// Creates an AddressValidator for production use.
+    /// </summary>
     public AddressValidator(BTCPayServerEnvironment environment)
     {
-        _environment = environment;
+        _networkType = environment.NetworkType;
+    }
+
+    /// <summary>
+    /// Creates an AddressValidator with an explicit network type.
+    /// Useful for testing without BTCPayServerEnvironment dependency.
+    /// </summary>
+    public AddressValidator(ChainName networkType)
+    {
+        _networkType = networkType;
     }
 
     /// <inheritdoc/>
-    public ChainName NetworkType => _environment.NetworkType;
+    public ChainName NetworkType => _networkType;
 
     /// <inheritdoc/>
     public AddressValidationResult ValidateBitcoinAddressForNetwork(string address)
@@ -55,8 +67,7 @@ public class AddressValidator : IAddressValidator
         if (string.IsNullOrWhiteSpace(address))
             return new AddressValidationResult(false, "Address is required.");
 
-        var networkType = _environment.NetworkType;
-        var expectedNetworkName = GetNetworkDisplayName(networkType);
+        var expectedNetworkName = GetNetworkDisplayName(_networkType);
 
         // Check if it's an XPUB (valid on all networks)
         if (ValidateXpub(address))
@@ -68,7 +79,7 @@ public class AddressValidator : IAddressValidator
         var isRegtestAddress = BtcRegtestAddressRegex.IsMatch(address);
 
         // Validate against current network
-        if (networkType == ChainName.Mainnet)
+        if (_networkType == ChainName.Mainnet)
         {
             if (isMainnetAddress)
                 return new AddressValidationResult(true, null);
@@ -76,7 +87,7 @@ public class AddressValidator : IAddressValidator
                 return new AddressValidationResult(false,
                     $"This appears to be a testnet/regtest address, but you are running on {expectedNetworkName}. Please use a mainnet address (starting with bc1, 1, or 3).");
         }
-        else if (networkType == ChainName.Testnet)
+        else if (_networkType == ChainName.Testnet)
         {
             if (isTestnetAddress)
                 return new AddressValidationResult(true, null);
@@ -87,7 +98,7 @@ public class AddressValidator : IAddressValidator
                 return new AddressValidationResult(false,
                     $"This appears to be a regtest address, but you are running on {expectedNetworkName}. Please use a testnet address (starting with tb1, m, n, or 2).");
         }
-        else if (networkType == ChainName.Regtest)
+        else if (_networkType == ChainName.Regtest)
         {
             if (isRegtestAddress)
                 return new AddressValidationResult(true, null);
@@ -130,11 +141,10 @@ public class AddressValidator : IAddressValidator
         if (string.IsNullOrWhiteSpace(address))
             return new AddressValidationResult(false, "Liquid address is required.");
 
-        var networkType = _environment.NetworkType;
         var isMainnetAddress = LiquidMainnetAddressRegex.IsMatch(address);
         var isTestnetAddress = LiquidTestnetAddressRegex.IsMatch(address);
 
-        if (networkType == ChainName.Mainnet)
+        if (_networkType == ChainName.Mainnet)
         {
             if (isMainnetAddress)
                 return new AddressValidationResult(true, null);

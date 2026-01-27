@@ -1,7 +1,6 @@
 #nullable enable
 using System.Net.Http;
 using BTCPayServer.Plugins.Stash.Services;
-using BTCPayServer.Services;
 using Microsoft.Extensions.Logging;
 using Moq;
 using NBitcoin;
@@ -18,7 +17,7 @@ public static class TestHelpers
 {
     /// <summary>
     /// Creates a real BoltzApiService for testing with a mocked HTTP handler.
-    /// This tests the actual production code, not a duplicate.
+    /// Uses the ChainName constructor to avoid BTCPayServerEnvironment mocking issues.
     /// </summary>
     public static BoltzApiService CreateBoltzApiService(
         MockHttpMessageHandler mockHttp,
@@ -32,42 +31,24 @@ public static class TestHelpers
             .Setup(f => f.CreateClient("Boltz"))
             .Returns(mockHttp.ToHttpClient());
 
-        // Create a mock BTCPayServerEnvironment
-        var mockEnvironment = new Mock<BTCPayServerEnvironment>(
-            MockBehavior.Loose,
-            null!, // IWebHostEnvironment
-            null!, // IOptions<DataDirectories>
-            null!  // BTCPayNetworkProvider
-        );
-        mockEnvironment.Setup(e => e.NetworkType).Returns(effectiveNetwork);
-
         // Create a mock logger
         var mockLogger = Mock.Of<ILogger<BoltzApiService>>();
 
-        // Create the real BoltzApiService with mocked dependencies
+        // Create the real BoltzApiService with the ChainName constructor
         return new BoltzApiService(
             mockHttpClientFactory.Object,
-            mockEnvironment.Object,
+            effectiveNetwork,
             mockLogger,
             mockOptions: null);
     }
 
     /// <summary>
-    /// Creates a real AddressValidator for testing with a mocked environment.
-    /// This tests the actual production code, not a duplicate.
+    /// Creates a real AddressValidator for testing.
+    /// Uses the ChainName constructor to avoid BTCPayServerEnvironment mocking issues.
     /// </summary>
     public static AddressValidator CreateAddressValidator(ChainName network)
     {
-        // Create a mock BTCPayServerEnvironment
-        var mockEnvironment = new Mock<BTCPayServerEnvironment>(
-            MockBehavior.Loose,
-            null!, // IWebHostEnvironment
-            null!, // IOptions<DataDirectories>
-            null!  // BTCPayNetworkProvider
-        );
-        mockEnvironment.Setup(e => e.NetworkType).Returns(network);
-
-        // Create the real AddressValidator with mocked dependencies
-        return new AddressValidator(mockEnvironment.Object);
+        // Use the ChainName constructor directly - no mocking needed
+        return new AddressValidator(network);
     }
 }

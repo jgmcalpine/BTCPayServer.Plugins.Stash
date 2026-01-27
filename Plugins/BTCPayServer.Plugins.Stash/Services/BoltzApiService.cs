@@ -21,7 +21,7 @@ namespace BTCPayServer.Plugins.Stash.Services;
 public class BoltzApiService : IBoltzApiService
 {
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly BTCPayServerEnvironment _environment;
+    private readonly NBitcoin.ChainName _networkType;
     private readonly MockBoltzOptions? _mockOptions;
     private readonly ILogger<BoltzApiService> _logger;
 
@@ -32,6 +32,9 @@ public class BoltzApiService : IBoltzApiService
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
+    /// <summary>
+    /// Creates a BoltzApiService for production use.
+    /// </summary>
     public BoltzApiService(
         IHttpClientFactory httpClientFactory,
         BTCPayServerEnvironment environment,
@@ -39,7 +42,23 @@ public class BoltzApiService : IBoltzApiService
         MockBoltzOptions? mockOptions = null)
     {
         _httpClientFactory = httpClientFactory;
-        _environment = environment;
+        _networkType = environment.NetworkType;
+        _logger = logger;
+        _mockOptions = mockOptions;
+    }
+
+    /// <summary>
+    /// Creates a BoltzApiService with an explicit network type.
+    /// Useful for testing without BTCPayServerEnvironment dependency.
+    /// </summary>
+    public BoltzApiService(
+        IHttpClientFactory httpClientFactory,
+        NBitcoin.ChainName networkType,
+        ILogger<BoltzApiService> logger,
+        MockBoltzOptions? mockOptions = null)
+    {
+        _httpClientFactory = httpClientFactory;
+        _networkType = networkType;
         _logger = logger;
         _mockOptions = mockOptions;
     }
@@ -48,7 +67,7 @@ public class BoltzApiService : IBoltzApiService
     /// Whether the service is using the mock Boltz server.
     /// </summary>
     public bool IsMockMode => _mockOptions?.Enabled == true && 
-                              _environment.NetworkType == NBitcoin.ChainName.Regtest;
+                              _networkType == NBitcoin.ChainName.Regtest;
 
     /// <summary>
     /// Gets the Boltz API base URL based on the current network and mock settings.
@@ -57,7 +76,7 @@ public class BoltzApiService : IBoltzApiService
     {
         // Use mock server for regtest when enabled
         if (_mockOptions?.Enabled == true && 
-            _environment.NetworkType == NBitcoin.ChainName.Regtest)
+            _networkType == NBitcoin.ChainName.Regtest)
         {
             var mockUrl = $"http://localhost:{_mockOptions.Port}";
             _logger.LogDebug("Using mock Boltz server at {Url}", mockUrl);
@@ -67,7 +86,7 @@ public class BoltzApiService : IBoltzApiService
         // Boltz uses the same API for mainnet and testnet, but different endpoints
         // Mainnet: https://api.boltz.exchange
         // Testnet: https://api.testnet.boltz.exchange
-        if (_environment.NetworkType == NBitcoin.ChainName.Mainnet)
+        if (_networkType == NBitcoin.ChainName.Mainnet)
             return "https://api.boltz.exchange";
         
         // For testnet and regtest (without mock), use testnet API
