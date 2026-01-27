@@ -4,6 +4,7 @@ using BTCPayServer.Plugins.Stash.Data;
 using BTCPayServer.Plugins.Stash.Data.Models;
 using BTCPayServer.Plugins.Stash.Services;
 using BTCPayServer.Services;
+using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
 using BTCPayServer.Services.Wallets;
 using BTCPayServer.Payments;
