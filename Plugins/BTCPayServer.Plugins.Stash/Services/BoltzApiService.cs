@@ -100,30 +100,45 @@ public class BoltzApiService
     /// Gets a quote for a reverse swap (Lightning -> Liquid).
     /// This is the first step: get current fees and limits.
     /// </summary>
-    public async Task<BoltzReverseQuoteResponse?> GetReverseQuoteAsync(
+    /// <exception cref="BoltzApiException">Thrown when Boltz API returns an error response.</exception>
+    /// <exception cref="HttpRequestException">Thrown for network-level errors.</exception>
+    public async Task<BoltzReverseQuoteResponse> GetReverseQuoteAsync(
         long invoiceAmountSats,
         CancellationToken cancellationToken = default)
     {
+        var client = _httpClientFactory.CreateClient("Boltz");
+        // BTC/L-BTC is Lightning BTC -> Liquid BTC
+        var url = $"{GetBaseUrl()}/v2/swap/reverse/quote?from=BTC&to=L-BTC&invoiceAmount={invoiceAmountSats}";
+        
+        _logger.LogDebug("Getting reverse quote from Boltz: {Url}", url);
+        
         try
         {
-            var client = _httpClientFactory.CreateClient("Boltz");
-            // BTC/L-BTC is Lightning BTC -> Liquid BTC
-            // For USDT, we need to check what pair Boltz supports
-            // The typical pair for Lightning -> Liquid USDT would be BTC/USDT
-            var url = $"{GetBaseUrl()}/v2/swap/reverse/quote?from=BTC&to=L-BTC&invoiceAmount={invoiceAmountSats}";
-            
-            _logger.LogDebug("Getting reverse quote from Boltz: {Url}", url);
-            
             var response = await client.GetAsync(url, cancellationToken);
+            var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
             
             if (!response.IsSuccessStatusCode)
             {
-                var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
-                _logger.LogError("Boltz quote failed: {StatusCode} - {Error}", response.StatusCode, errorContent);
-                return null;
+                _logger.LogError("Boltz quote failed: {StatusCode} - {Error}", response.StatusCode, responseContent);
+                
+                // Try to parse error response
+                try
+                {
+                    var errorResponse = JsonSerializer.Deserialize<BoltzErrorResponse>(responseContent, JsonOptions);
+                    throw new BoltzApiException(errorResponse?.Error ?? responseContent, response.StatusCode);
+                }
+                catch (JsonException)
+                {
+                    throw new BoltzApiException(responseContent, response.StatusCode);
+                }
             }
             
-            return await response.Content.ReadFromJsonAsync<BoltzReverseQuoteResponse>(JsonOptions, cancellationToken);
+            var result = JsonSerializer.Deserialize<BoltzReverseQuoteResponse>(responseContent, JsonOptions);
+            return result ?? throw new BoltzApiException("Empty response from Boltz API", System.Net.HttpStatusCode.OK);
+        }
+        catch (BoltzApiException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -136,21 +151,24 @@ public class BoltzApiService
     /// Creates a reverse swap (Lightning -> Liquid).
     /// Returns a Lightning invoice that must be paid, and Boltz will send Liquid to the claim address.
     /// </summary>
-    public async Task<BoltzCreateReverseSwapResponse?> CreateReverseSwapAsync(
+    /// <exception cref="BoltzApiException">Thrown when Boltz API returns an error response.</exception>
+    /// <exception cref="HttpRequestException">Thrown for network-level errors.</exception>
+    public async Task<BoltzCreateReverseSwapResponse> CreateReverseSwapAsync(
         BoltzCreateReverseSwapRequest request,
         CancellationToken cancellationToken = default)
     {
+        var client = _httpClientFactory.CreateClient("Boltz");
+        var url = $"{GetBaseUrl()}/v2/swap/reverse";
+        
+        // Redact sensitive data for logging
+        _logger.LogDebug("Creating reverse swap with Boltz for amount {Amount} sats", request.InvoiceAmount);
+        
+        var json = JsonSerializer.Serialize(request, JsonOptions);
+        var content = new StringContent(json, Encoding.UTF8, "application/json");
+        
         try
         {
-            var client = _httpClientFactory.CreateClient("Boltz");
-            var url = $"{GetBaseUrl()}/v2/swap/reverse";
-            
-            var json = JsonSerializer.Serialize(request, JsonOptions);
-            _logger.LogDebug("Creating reverse swap with Boltz: {Request}", json);
-            
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
             var response = await client.PostAsync(url, content, cancellationToken);
-            
             var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
             
             if (!response.IsSuccessStatusCode)
@@ -169,7 +187,8 @@ public class BoltzApiService
                 }
             }
             
-            return JsonSerializer.Deserialize<BoltzCreateReverseSwapResponse>(responseContent, JsonOptions);
+            var result = JsonSerializer.Deserialize<BoltzCreateReverseSwapResponse>(responseContent, JsonOptions);
+            return result ?? throw new BoltzApiException("Empty response from Boltz API", System.Net.HttpStatusCode.OK);
         }
         catch (BoltzApiException)
         {
@@ -185,25 +204,42 @@ public class BoltzApiService
     /// <summary>
     /// Gets the status of a swap.
     /// </summary>
-    public async Task<BoltzSwapStatusResponse?> GetSwapStatusAsync(
+    /// <exception cref="BoltzApiException">Thrown when Boltz API returns an error response.</exception>
+    /// <exception cref="HttpRequestException">Thrown for network-level errors.</exception>
+    public async Task<BoltzSwapStatusResponse> GetSwapStatusAsync(
         string swapId,
         CancellationToken cancellationToken = default)
     {
+        var client = _httpClientFactory.CreateClient("Boltz");
+        var url = $"{GetBaseUrl()}/v2/swap/{swapId}";
+        
         try
         {
-            var client = _httpClientFactory.CreateClient("Boltz");
-            var url = $"{GetBaseUrl()}/v2/swap/{swapId}";
-            
             var response = await client.GetAsync(url, cancellationToken);
+            var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
             
             if (!response.IsSuccessStatusCode)
             {
-                var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
-                _logger.LogError("Boltz get status failed: {StatusCode} - {Error}", response.StatusCode, errorContent);
-                return null;
+                _logger.LogError("Boltz get status failed: {StatusCode} - {Error}", response.StatusCode, responseContent);
+                
+                // Try to parse error response
+                try
+                {
+                    var errorResponse = JsonSerializer.Deserialize<BoltzErrorResponse>(responseContent, JsonOptions);
+                    throw new BoltzApiException(errorResponse?.Error ?? responseContent, response.StatusCode);
+                }
+                catch (JsonException)
+                {
+                    throw new BoltzApiException(responseContent, response.StatusCode);
+                }
             }
             
-            return await response.Content.ReadFromJsonAsync<BoltzSwapStatusResponse>(JsonOptions, cancellationToken);
+            var result = JsonSerializer.Deserialize<BoltzSwapStatusResponse>(responseContent, JsonOptions);
+            return result ?? throw new BoltzApiException("Empty response from Boltz API", System.Net.HttpStatusCode.OK);
+        }
+        catch (BoltzApiException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

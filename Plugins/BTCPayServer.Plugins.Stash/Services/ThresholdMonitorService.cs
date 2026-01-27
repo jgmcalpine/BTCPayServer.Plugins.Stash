@@ -18,6 +18,7 @@ namespace BTCPayServer.Plugins.Stash.Services;
 
 /// <summary>
 /// Periodically monitors pending allocations and triggers batch execution when thresholds are met.
+/// Implements exponential backoff for retry attempts to avoid overwhelming external services.
 /// </summary>
 public class ThresholdMonitorService(
     PluginDbContextFactory dbContextFactory,
@@ -28,6 +29,23 @@ public class ThresholdMonitorService(
     StoreRepository storeRepository,
     ILogger<ThresholdMonitorService> logger) : IPeriodicTask
 {
+    /// <summary>
+    /// Base delay for exponential backoff in seconds.
+    /// </summary>
+    private const int BaseBackoffSeconds = 30;
+
+    /// <summary>
+    /// Maximum backoff delay in seconds (15 minutes).
+    /// </summary>
+    private const int MaxBackoffSeconds = 900;
+
+    /// <summary>
+    /// Random jitter factor (0-0.3 = up to 30% jitter).
+    /// </summary>
+    private const double JitterFactor = 0.3;
+
+    private static readonly Random Jitter = new();
+
     public async Task Do(CancellationToken cancellationToken)
     {
         try
@@ -81,13 +99,27 @@ public class ThresholdMonitorService(
             return;
         }
 
-        // Check for retryable failed batches and retry them
+        // Check for retryable failed batches and retry them (with exponential backoff)
         var retryableBatch = failedBatches.FirstOrDefault(b => b.IsRetryable && b.RetryCount < BatchExecutionService.MaxAutoRetries);
         if (retryableBatch != null)
         {
+            // Check if enough backoff time has passed since the last failure
+            var backoffDelay = CalculateBackoffDelay(retryableBatch.RetryCount);
+            var nextRetryTime = retryableBatch.CompletedAt?.Add(backoffDelay);
+            
+            if (nextRetryTime.HasValue && DateTimeOffset.UtcNow < nextRetryTime.Value)
+            {
+                var waitRemaining = nextRetryTime.Value - DateTimeOffset.UtcNow;
+                logger.LogDebug(
+                    "Batch {BatchId} retry waiting for backoff. Next retry in {Seconds:F0} seconds.",
+                    retryableBatch.Id, waitRemaining.TotalSeconds);
+                return;
+            }
+
             logger.LogInformation(
-                "Retrying failed batch {BatchId} for store {StoreId} (attempt {RetryCount}/{MaxRetries})",
-                retryableBatch.Id, settings.StoreId, retryableBatch.RetryCount + 1, BatchExecutionService.MaxAutoRetries);
+                "Retrying failed batch {BatchId} for store {StoreId} (attempt {RetryCount}/{MaxRetries}, backoff: {BackoffSeconds}s)",
+                retryableBatch.Id, settings.StoreId, retryableBatch.RetryCount + 1, BatchExecutionService.MaxAutoRetries, 
+                (int)backoffDelay.TotalSeconds);
             
             await RetryBatchAsync(retryableBatch, settings);
             return;
@@ -184,6 +216,23 @@ public class ThresholdMonitorService(
             .Where(b => b.StoreId == storeId && b.Status == BatchStatus.Failed)
             .OrderBy(b => b.InitiatedAt)
             .ToListAsync();
+    }
+
+    /// <summary>
+    /// Calculates the backoff delay for a retry attempt using exponential backoff with jitter.
+    /// Delay = min(MaxBackoff, BaseBackoff * 2^retryCount) * (1 + random(0, JitterFactor))
+    /// </summary>
+    private static TimeSpan CalculateBackoffDelay(int retryCount)
+    {
+        // Calculate exponential delay: 30s, 60s, 120s, 240s, 480s (capped at 900s)
+        var exponentialSeconds = BaseBackoffSeconds * Math.Pow(2, retryCount);
+        var cappedSeconds = Math.Min(exponentialSeconds, MaxBackoffSeconds);
+        
+        // Add jitter to prevent thundering herd
+        var jitterMultiplier = 1 + (Jitter.NextDouble() * JitterFactor);
+        var finalSeconds = cappedSeconds * jitterMultiplier;
+        
+        return TimeSpan.FromSeconds(finalSeconds);
     }
 
     private async Task RetryBatchAsync(ExecutedBatch batch, StashSettings settings)

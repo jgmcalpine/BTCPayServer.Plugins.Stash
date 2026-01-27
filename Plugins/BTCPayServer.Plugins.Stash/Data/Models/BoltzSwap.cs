@@ -131,6 +131,15 @@ public class BoltzSwap
     public string? ClaimPublicKey { get; set; }
 
     /// <summary>
+    /// Claim private key used for the swap (hex encoded).
+    /// CRITICAL: This must be persisted before paying the invoice to enable recovery
+    /// if the swap succeeds on Boltz's side but our database update fails.
+    /// In production, consider encrypting this value at rest.
+    /// </summary>
+    [MaxLength(200)]
+    public string? ClaimPrivateKey { get; set; }
+
+    /// <summary>
     /// Swap tree data (JSON serialized).
     /// </summary>
     public string? SwapTreeJson { get; set; }

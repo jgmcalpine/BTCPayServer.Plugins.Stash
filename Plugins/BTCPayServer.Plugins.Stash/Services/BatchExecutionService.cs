@@ -222,54 +222,82 @@ public class BatchExecutionService(
         decimal currentExchangeRate,
         string fiatCurrency)
     {
-        await using var db = dbContextFactory.CreateContext();
+        // Validate inputs to prevent runtime errors
+        ArgumentNullException.ThrowIfNull(allocations);
+        
+        if (allocations.Count == 0)
+        {
+            throw new ArgumentException("Cannot create batch with no allocations.", nameof(allocations));
+        }
 
         var totalSats = allocations.Sum(a => a.AllocatedSats);
-        var fiatValue = (totalSats / 100_000_000m) * currentExchangeRate;
-
-        // Calculate weighted average cost basis
-        var weightedCostBasis = allocations.Sum(a => a.AllocatedSats * a.ExchangeRateAtReceipt) 
-                                / (decimal)totalSats;
-
-        var batch = new ExecutedBatch
-        {
-            StoreId = storeId,
-            ExecutionType = executionType,
-            Status = BatchStatus.Pending,
-            TotalSats = totalSats,
-            FeeSats = 0, // Will be updated after execution
-            NetSats = totalSats,
-            FiatValueAtExecution = fiatValue,
-            FiatCurrency = fiatCurrency,
-            ExchangeRateAtExecution = currentExchangeRate,
-            WeightedAverageCostBasis = weightedCostBasis,
-            DestinationAddress = destinationAddress,
-            AllocationCount = allocations.Count,
-            InitiatedAt = DateTimeOffset.UtcNow
-        };
-
-        db.ExecutedBatches.Add(batch);
-        await db.SaveChangesAsync();
-
-        // Link allocations to this batch immediately (but don't mark as executed yet)
-        // This ensures we know which allocations belong to this batch even if it fails
-        var allocationIds = allocations.Select(a => a.Id).ToList();
-        var dbAllocations = await db.PendingAllocations
-            .Where(a => allocationIds.Contains(a.Id))
-            .ToListAsync();
         
-        foreach (var allocation in dbAllocations)
+        if (totalSats <= 0)
         {
-            allocation.ExecutedBatchId = batch.Id;
-            // IsExecuted remains false until batch succeeds
+            throw new ArgumentException(
+                $"Cannot create batch with zero or negative total sats ({totalSats}). Allocations may have invalid values.",
+                nameof(allocations));
         }
-        await db.SaveChangesAsync();
 
-        logger.LogInformation(
-            "Created batch {BatchId} for store {StoreId}: {TotalSats} sats ({FiatValue} {Currency}), linked {Count} allocations",
-            batch.Id, storeId, totalSats, fiatValue, fiatCurrency, dbAllocations.Count);
+        await using var db = dbContextFactory.CreateContext();
+        await using var transaction = await db.Database.BeginTransactionAsync();
 
-        return batch;
+        try
+        {
+            var fiatValue = (totalSats / 100_000_000m) * currentExchangeRate;
+
+            // Calculate weighted average cost basis (safe now that we've validated totalSats > 0)
+            var weightedCostBasis = allocations.Sum(a => a.AllocatedSats * a.ExchangeRateAtReceipt) 
+                                    / (decimal)totalSats;
+
+            var batch = new ExecutedBatch
+            {
+                StoreId = storeId,
+                ExecutionType = executionType,
+                Status = BatchStatus.Pending,
+                TotalSats = totalSats,
+                FeeSats = 0, // Will be updated after execution
+                NetSats = totalSats,
+                FiatValueAtExecution = fiatValue,
+                FiatCurrency = fiatCurrency,
+                ExchangeRateAtExecution = currentExchangeRate,
+                WeightedAverageCostBasis = weightedCostBasis,
+                DestinationAddress = destinationAddress,
+                AllocationCount = allocations.Count,
+                InitiatedAt = DateTimeOffset.UtcNow
+            };
+
+            db.ExecutedBatches.Add(batch);
+            await db.SaveChangesAsync();
+
+            // Link allocations to this batch immediately (but don't mark as executed yet)
+            // This ensures we know which allocations belong to this batch even if it fails
+            var allocationIds = allocations.Select(a => a.Id).ToList();
+            var dbAllocations = await db.PendingAllocations
+                .Where(a => allocationIds.Contains(a.Id))
+                .ToListAsync();
+            
+            foreach (var allocation in dbAllocations)
+            {
+                allocation.ExecutedBatchId = batch.Id;
+                // IsExecuted remains false until batch succeeds
+            }
+            await db.SaveChangesAsync();
+
+            // Commit the transaction - batch and allocation links are now atomic
+            await transaction.CommitAsync();
+
+            logger.LogInformation(
+                "Created batch {BatchId} for store {StoreId}: {TotalSats} sats ({FiatValue} {Currency}), linked {Count} allocations",
+                batch.Id, storeId, totalSats, fiatValue, fiatCurrency, dbAllocations.Count);
+
+            return batch;
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            throw;
+        }
     }
 
     /// <summary>
@@ -296,12 +324,63 @@ public class BatchExecutionService(
     }
 
     /// <summary>
+    /// Validates a Boltz quote response to ensure values are reasonable.
+    /// Protects against malicious or buggy API responses.
+    /// </summary>
+    private static QuoteValidationResult ValidateQuoteResponse(BoltzReverseQuoteResponse quote, long invoiceAmount)
+    {
+        // Check for negative or zero onchain amount
+        if (quote.OnchainAmount <= 0)
+        {
+            return new QuoteValidationResult(false, 
+                $"Invalid quote: onchain amount ({quote.OnchainAmount}) must be positive.");
+        }
+
+        // Check for negative fees
+        if (quote.MinerFee < 0 || quote.ServiceFee < 0)
+        {
+            return new QuoteValidationResult(false, 
+                $"Invalid quote: fees cannot be negative (miner: {quote.MinerFee}, service: {quote.ServiceFee}).");
+        }
+
+        // Check that fees don't exceed the invoice amount
+        var totalFees = quote.MinerFee + quote.ServiceFee;
+        if (totalFees >= invoiceAmount)
+        {
+            return new QuoteValidationResult(false, 
+                $"Invalid quote: total fees ({totalFees}) exceed invoice amount ({invoiceAmount}).");
+        }
+
+        // Check that onchain amount + fees roughly equals invoice amount (within 1% tolerance for rounding)
+        var expectedOnchain = invoiceAmount - totalFees;
+        var tolerance = invoiceAmount * 0.01m; // 1% tolerance
+        if (Math.Abs(quote.OnchainAmount - expectedOnchain) > tolerance)
+        {
+            return new QuoteValidationResult(false, 
+                $"Invalid quote: onchain amount ({quote.OnchainAmount}) doesn't match expected ({expectedOnchain}) after fees.");
+        }
+
+        // Check for unreasonably high fee percentage (>10% is suspicious)
+        var feePercentage = (totalFees * 100m) / invoiceAmount;
+        if (feePercentage > 10)
+        {
+            return new QuoteValidationResult(false, 
+                $"Invalid quote: fee percentage ({feePercentage:F2}%) is unreasonably high.");
+        }
+
+        return new QuoteValidationResult(true, null);
+    }
+
+    /// <summary>
     /// Executes a cold storage sweep (on-chain transaction).
     /// </summary>
     public async Task<BatchExecutionResult> ExecuteColdStorageSweepAsync(
         ExecutedBatch batch,
         StashSettings settings)
     {
+        ArgumentNullException.ThrowIfNull(batch);
+        ArgumentNullException.ThrowIfNull(settings);
+
         await using var db = dbContextFactory.CreateContext();
         var dbBatch = await db.ExecutedBatches.FindAsync(batch.Id);
         
@@ -543,6 +622,9 @@ public class BatchExecutionService(
         ExecutedBatch batch,
         StashSettings settings)
     {
+        ArgumentNullException.ThrowIfNull(batch);
+        ArgumentNullException.ThrowIfNull(settings);
+
         await using var db = dbContextFactory.CreateContext();
         var dbBatch = await db.ExecutedBatches.FindAsync(batch.Id);
         
@@ -601,17 +683,34 @@ public class BatchExecutionService(
                 "Getting Boltz quote for batch {BatchId}: {Sats} sats",
                 batch.Id, batch.TotalSats);
 
-            var quote = await boltzApiService.GetReverseQuoteAsync(batch.TotalSats);
-            if (quote == null)
+            BoltzReverseQuoteResponse quote;
+            try
             {
+                quote = await boltzApiService.GetReverseQuoteAsync(batch.TotalSats);
+            }
+            catch (BoltzApiException ex)
+            {
+                var isRetryable = BoltzApiService.IsTransientError(ex);
                 return await FailBatchAsync(dbBatch, 
-                    "Failed to get quote from Boltz. Please try again later.", 
-                    BatchErrorType.NetworkError, true);
+                    $"Failed to get quote from Boltz: {ex.Message}", 
+                    BatchErrorType.NetworkError, isRetryable);
             }
 
             logger.LogInformation(
                 "Boltz quote received: onchain={OnchainAmount}, minerFee={MinerFee}, serviceFee={ServiceFee}",
                 quote.OnchainAmount, quote.MinerFee, quote.ServiceFee);
+
+            // Validate quote values to protect against malicious or buggy API responses
+            var quoteValidation = ValidateQuoteResponse(quote, batch.TotalSats);
+            if (!quoteValidation.IsValid)
+            {
+                logger.LogWarning(
+                    "Invalid quote received for batch {BatchId}: {Error}",
+                    batch.Id, quoteValidation.ErrorMessage);
+                return await FailBatchAsync(dbBatch, 
+                    quoteValidation.ErrorMessage!, 
+                    BatchErrorType.ExecutionError, false);
+            }
 
             // Step 3: Generate a claim keypair for the swap
             // In production, this should use proper key derivation from the store's wallet
@@ -633,16 +732,10 @@ public class BatchExecutionService(
                 "Creating Boltz reverse swap for batch {BatchId}",
                 batch.Id);
 
-            BoltzCreateReverseSwapResponse? swapResponse;
+            BoltzCreateReverseSwapResponse swapResponse;
             try
             {
                 swapResponse = await boltzApiService.CreateReverseSwapAsync(createRequest);
-                if (swapResponse == null)
-                {
-                    return await FailBatchAsync(dbBatch, 
-                        "Failed to create swap with Boltz.", 
-                        BatchErrorType.NetworkError, true);
-                }
             }
             catch (BoltzApiException ex)
             {
@@ -653,6 +746,8 @@ public class BatchExecutionService(
             }
 
             // Step 5: Create BoltzSwap record to track the swap
+            // CRITICAL: Store the claim private key BEFORE paying the invoice
+            // This ensures we can recover funds if the swap succeeds but our DB update fails
             boltzSwap = new BoltzSwap
             {
                 StoreId = batch.StoreId,
@@ -670,6 +765,7 @@ public class BatchExecutionService(
                 TimeoutBlockHeight = swapResponse.TimeoutBlockHeight,
                 BlindingKey = swapResponse.BlindingKey,
                 ClaimPublicKey = claimKeyPair.PublicKeyHex,
+                ClaimPrivateKey = claimKeyPair.PrivateKeyHex, // Store private key for recovery
                 SwapTreeJson = swapResponse.SwapTree != null 
                     ? JsonSerializer.Serialize(swapResponse.SwapTree) 
                     : null
@@ -840,9 +936,11 @@ public class BatchExecutionService(
         try
         {
             // Check for mock invoice (from MockBoltzServer) - skip actual payment
-            if (bolt11Invoice.Contains("1pmock"))
+            // SECURITY: Only allow mock invoice bypass when in mock mode on regtest
+            // This prevents attackers from crafting invoices with "1pmock" to bypass payment
+            if (boltzApiService.IsMockMode && bolt11Invoice.Contains("1pmock"))
             {
-                logger.LogInformation("Detected mock Boltz invoice - simulating successful payment");
+                logger.LogInformation("Mock mode: Detected mock Boltz invoice - simulating successful payment");
                 // Generate a fake preimage for the mock
                 var fakePreimage = Convert.ToHexString(Guid.NewGuid().ToByteArray()).ToLower();
                 return new LightningPaymentResult
@@ -907,17 +1005,15 @@ public class BatchExecutionService(
         var startTime = DateTimeOffset.UtcNow;
         var pollInterval = TimeSpan.FromSeconds(5);
 
+        var consecutiveErrors = 0;
+        const int maxConsecutiveErrors = 5;
+
         while (DateTimeOffset.UtcNow - startTime < timeout)
         {
             try
             {
                 var status = await boltzApiService.GetSwapStatusAsync(swapId);
-                if (status == null)
-                {
-                    logger.LogWarning("Failed to get swap status for {SwapId}", swapId);
-                    await Task.Delay(pollInterval);
-                    continue;
-                }
+                consecutiveErrors = 0; // Reset on success
 
                 logger.LogDebug("Swap {SwapId} status: {Status}", swapId, status.Status);
 
@@ -957,7 +1053,21 @@ public class BatchExecutionService(
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "Error polling swap status for {SwapId}", swapId);
+                consecutiveErrors++;
+                logger.LogWarning(ex, "Error polling swap status for {SwapId} (attempt {Attempt}/{Max})", 
+                    swapId, consecutiveErrors, maxConsecutiveErrors);
+
+                // If we hit too many consecutive errors, fail rather than keep retrying
+                if (consecutiveErrors >= maxConsecutiveErrors)
+                {
+                    return new SwapCompletionResult
+                    {
+                        Success = false,
+                        ErrorMessage = $"Failed to get swap status after {maxConsecutiveErrors} consecutive errors: {ex.Message}",
+                        IsRetryable = IsTransientError(ex) || BoltzApiService.IsTransientError(ex)
+                    };
+                }
+
                 await Task.Delay(pollInterval);
             }
         }
@@ -1182,6 +1292,18 @@ public class AddressValidationResult
     public string? ErrorMessage { get; }
 
     public AddressValidationResult(bool isValid, string? errorMessage)
+    {
+        IsValid = isValid;
+        ErrorMessage = errorMessage;
+    }
+}
+
+public class QuoteValidationResult
+{
+    public bool IsValid { get; }
+    public string? ErrorMessage { get; }
+
+    public QuoteValidationResult(bool isValid, string? errorMessage)
     {
         IsValid = isValid;
         ErrorMessage = errorMessage;

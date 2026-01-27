@@ -36,7 +36,7 @@ public class PluginDbContext : DbContext
         {
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => e.StoreId);
-            entity.HasIndex(e => e.InvoiceId);
+            entity.HasIndex(e => e.InvoiceId).IsUnique(); // Prevent duplicate allocations for same invoice
             entity.HasIndex(e => e.IsExecuted);
             entity.HasIndex(e => new { e.StoreId, e.IsExecuted });
             entity.Property(e => e.FiatValueAtReceipt).HasPrecision(18, 2);

@@ -76,21 +76,32 @@ public class TestableBoltzApiService
         return System.Text.Json.JsonSerializer.Deserialize<BoltzPairsResponse>(content, JsonOptions);
     }
 
-    public async Task<BoltzReverseQuoteResponse?> GetReverseQuoteAsync(
+    public async Task<BoltzReverseQuoteResponse> GetReverseQuoteAsync(
         long invoiceAmountSats,
         CancellationToken cancellationToken = default)
     {
         var url = $"{GetBaseUrl()}/v2/swap/reverse/quote?from=BTC&to=L-BTC&invoiceAmount={invoiceAmountSats}";
         var response = await _httpClient.GetAsync(url, cancellationToken);
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
         
         if (!response.IsSuccessStatusCode)
-            return null;
+        {
+            try
+            {
+                var error = System.Text.Json.JsonSerializer.Deserialize<BoltzErrorResponse>(content, JsonOptions);
+                throw new BoltzApiException(error?.Error ?? content, response.StatusCode);
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                throw new BoltzApiException(content, response.StatusCode);
+            }
+        }
         
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
-        return System.Text.Json.JsonSerializer.Deserialize<BoltzReverseQuoteResponse>(content, JsonOptions);
+        var result = System.Text.Json.JsonSerializer.Deserialize<BoltzReverseQuoteResponse>(content, JsonOptions);
+        return result ?? throw new BoltzApiException("Empty response", System.Net.HttpStatusCode.OK);
     }
 
-    public async Task<BoltzCreateReverseSwapResponse?> CreateReverseSwapAsync(
+    public async Task<BoltzCreateReverseSwapResponse> CreateReverseSwapAsync(
         BoltzCreateReverseSwapRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -113,21 +124,33 @@ public class TestableBoltzApiService
             }
         }
 
-        return System.Text.Json.JsonSerializer.Deserialize<BoltzCreateReverseSwapResponse>(content, JsonOptions);
+        var result = System.Text.Json.JsonSerializer.Deserialize<BoltzCreateReverseSwapResponse>(content, JsonOptions);
+        return result ?? throw new BoltzApiException("Empty response", System.Net.HttpStatusCode.OK);
     }
 
-    public async Task<BoltzSwapStatusResponse?> GetSwapStatusAsync(
+    public async Task<BoltzSwapStatusResponse> GetSwapStatusAsync(
         string swapId,
         CancellationToken cancellationToken = default)
     {
         var url = $"{GetBaseUrl()}/v2/swap/{swapId}";
         var response = await _httpClient.GetAsync(url, cancellationToken);
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
         
         if (!response.IsSuccessStatusCode)
-            return null;
+        {
+            try
+            {
+                var error = System.Text.Json.JsonSerializer.Deserialize<BoltzErrorResponse>(content, JsonOptions);
+                throw new BoltzApiException(error?.Error ?? content, response.StatusCode);
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                throw new BoltzApiException(content, response.StatusCode);
+            }
+        }
         
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
-        return System.Text.Json.JsonSerializer.Deserialize<BoltzSwapStatusResponse>(content, JsonOptions);
+        var result = System.Text.Json.JsonSerializer.Deserialize<BoltzSwapStatusResponse>(content, JsonOptions);
+        return result ?? throw new BoltzApiException("Empty response", System.Net.HttpStatusCode.OK);
     }
 }
 

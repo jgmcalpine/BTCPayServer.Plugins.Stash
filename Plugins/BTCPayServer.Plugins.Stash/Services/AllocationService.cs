@@ -15,7 +15,13 @@ public class AllocationService(
     ILogger<AllocationService> logger)
 {
     /// <summary>
+    /// Maximum number of retries when handling concurrent allocation attempts.
+    /// </summary>
+    private const int MaxRetries = 3;
+
+    /// <summary>
     /// Records a new allocation from a settled invoice.
+    /// Uses optimistic concurrency with retry-on-conflict to prevent duplicate allocations.
     /// </summary>
     public async Task<PendingAllocation> CreateAllocationAsync(
         string storeId,
@@ -26,42 +32,105 @@ public class AllocationService(
         decimal exchangeRate,
         string fiatCurrency)
     {
-        await using var db = dbContextFactory.CreateContext();
-
-        // Check if we already processed this invoice
-        var existing = await db.PendingAllocations
-            .FirstOrDefaultAsync(a => a.InvoiceId == invoiceId);
-
-        if (existing != null)
+        // Validate exchange rate to prevent corrupted calculations
+        if (exchangeRate < 0 || exchangeRate > 10_000_000)
         {
-            logger.LogDebug("Allocation already exists for invoice {InvoiceId}", invoiceId);
-            return existing;
+            logger.LogWarning(
+                "Invalid exchange rate {Rate} for invoice {InvoiceId}, using 0",
+                exchangeRate, invoiceId);
+            exchangeRate = 0;
         }
 
-        var allocatedSats = (long)(totalReceivedSats * (allocationPercentage / 100m));
-        var fiatValue = (allocatedSats / 100_000_000m) * exchangeRate;
-
-        var allocation = new PendingAllocation
+        for (var attempt = 0; attempt < MaxRetries; attempt++)
         {
-            StoreId = storeId,
-            InvoiceId = invoiceId,
-            PaymentMethod = paymentMethod,
-            TotalReceivedSats = totalReceivedSats,
-            AllocatedSats = allocatedSats,
-            FiatValueAtReceipt = fiatValue,
-            FiatCurrency = fiatCurrency,
-            ExchangeRateAtReceipt = exchangeRate,
-            SettledAt = DateTimeOffset.UtcNow
-        };
+            try
+            {
+                await using var db = dbContextFactory.CreateContext();
 
-        db.PendingAllocations.Add(allocation);
-        await db.SaveChangesAsync();
+                // Check if we already processed this invoice
+                var existing = await db.PendingAllocations
+                    .FirstOrDefaultAsync(a => a.InvoiceId == invoiceId);
 
-        logger.LogInformation(
-            "Created allocation for invoice {InvoiceId}: {AllocatedSats} sats ({FiatValue} {Currency})",
-            invoiceId, allocatedSats, fiatValue, fiatCurrency);
+                if (existing != null)
+                {
+                    logger.LogDebug("Allocation already exists for invoice {InvoiceId}", invoiceId);
+                    return existing;
+                }
 
-        return allocation;
+                var allocatedSats = (long)(totalReceivedSats * (allocationPercentage / 100m));
+                var fiatValue = (allocatedSats / 100_000_000m) * exchangeRate;
+
+                var allocation = new PendingAllocation
+                {
+                    StoreId = storeId,
+                    InvoiceId = invoiceId,
+                    PaymentMethod = paymentMethod,
+                    TotalReceivedSats = totalReceivedSats,
+                    AllocatedSats = allocatedSats,
+                    FiatValueAtReceipt = fiatValue,
+                    FiatCurrency = fiatCurrency,
+                    ExchangeRateAtReceipt = exchangeRate,
+                    SettledAt = DateTimeOffset.UtcNow
+                };
+
+                db.PendingAllocations.Add(allocation);
+                await db.SaveChangesAsync();
+
+                logger.LogInformation(
+                    "Created allocation for invoice {InvoiceId}: {AllocatedSats} sats ({FiatValue} {Currency})",
+                    invoiceId, allocatedSats, fiatValue, fiatCurrency);
+
+                return allocation;
+            }
+            catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
+            {
+                // Another thread/process created the allocation - fetch and return it
+                logger.LogDebug(
+                    "Concurrent allocation detected for invoice {InvoiceId}, attempt {Attempt}/{MaxRetries}",
+                    invoiceId, attempt + 1, MaxRetries);
+
+                await using var db = dbContextFactory.CreateContext();
+                var existing = await db.PendingAllocations
+                    .FirstOrDefaultAsync(a => a.InvoiceId == invoiceId);
+
+                if (existing != null)
+                {
+                    return existing;
+                }
+
+                // If still not found, retry (extremely rare edge case)
+                if (attempt == MaxRetries - 1)
+                {
+                    logger.LogError(ex, 
+                        "Failed to create or find allocation for invoice {InvoiceId} after {MaxRetries} attempts",
+                        invoiceId, MaxRetries);
+                    throw;
+                }
+
+                // Brief delay before retry to reduce contention
+                await Task.Delay(10 * (attempt + 1));
+            }
+        }
+
+        // Should never reach here, but compiler needs this
+        throw new InvalidOperationException($"Failed to create allocation for invoice {invoiceId}");
+    }
+
+    /// <summary>
+    /// Checks if a DbUpdateException is caused by a unique constraint violation.
+    /// </summary>
+    private static bool IsUniqueConstraintViolation(DbUpdateException ex)
+    {
+        // PostgreSQL unique violation error code
+        if (ex.InnerException is Npgsql.PostgresException pgEx)
+        {
+            return pgEx.SqlState == "23505"; // unique_violation
+        }
+
+        // Generic check for other providers
+        var message = ex.InnerException?.Message ?? ex.Message;
+        return message.Contains("unique", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("duplicate", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

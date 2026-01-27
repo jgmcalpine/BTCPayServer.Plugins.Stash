@@ -135,11 +135,10 @@ public class SwapExecutionFlowTests
 
         var service = TestHelpers.CreateBoltzApiService(mockHttp);
 
-        // Act
-        var quote = await service.GetReverseQuoteAsync(100); // Too small
-
-        // Assert
-        Assert.Null(quote);
+        // Act & Assert - now throws BoltzApiException
+        var exception = await Assert.ThrowsAsync<BoltzApiException>(
+            () => service.GetReverseQuoteAsync(100)); // Too small
+        Assert.Contains("Amount below minimum", exception.Message);
     }
 
     [Fact]
