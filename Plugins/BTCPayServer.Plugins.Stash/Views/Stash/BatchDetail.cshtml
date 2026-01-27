@@ -15,9 +15,10 @@
     <div class="d-flex gap-2 mt-3 mt-sm-0">
         @if (Model.CanRetry)
         {
-            <form asp-action="RetryBatch" asp-route-storeId="@storeId" asp-route-batchId="@batch.Id" method="post" class="d-inline">
-                <button type="submit" class="btn btn-primary" @(Model.HasAddressIssue ? "disabled" : "")>
-                    <i class="fa fa-refresh"></i> Retry Batch
+            <form asp-action="RetryBatch" asp-route-storeId="@storeId" asp-route-batchId="@batch.Id" method="post" class="d-inline" id="retryForm">
+                <button type="submit" class="btn btn-primary" id="retryBtn" @(Model.HasAddressIssue ? "disabled" : "")>
+                    <span class="btn-text"><i class="fa fa-refresh"></i> Retry Batch</span>
+                    <span class="btn-spinner d-none"><span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Retrying...</span>
                 </button>
             </form>
         }
@@ -223,4 +224,22 @@
         </div>
     }
 </div>
+
+@section PageFootContent {
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const form = document.getElementById('retryForm');
+            const btn = document.getElementById('retryBtn');
+            
+            if (form && btn) {
+                form.addEventListener('submit', function(e) {
+                    // Disable button and show spinner
+                    btn.disabled = true;
+                    btn.querySelector('.btn-text').classList.add('d-none');
+                    btn.querySelector('.btn-spinner').classList.remove('d-none');
+                });
+            }
+        });
+    </script>
+}
 

@@ -284,7 +284,8 @@ public class MockBoltzServer : BackgroundService
             _ => $"{amountSats}u"
         };
         
-        var randomPart = Convert.ToHexString(Guid.NewGuid().ToByteArray())[..40].ToLower();
+        // GUID is 16 bytes = 32 hex chars
+        var randomPart = Convert.ToHexString(Guid.NewGuid().ToByteArray()).ToLower();
         return $"lntb{amountPart}1pmock{randomPart}";
     }
 

@@ -157,10 +157,11 @@ public class StashController(
                 return View(model);
             }
 
-            if (!batchExecutionService.ValidateLiquidAddress(model.LiquidAddress))
+            // Use network-aware validation (allows ert1/el1 for regtest)
+            var liquidValidation = batchExecutionService.ValidateLiquidAddressForNetwork(model.LiquidAddress);
+            if (!liquidValidation.IsValid)
             {
-                ModelState.AddModelError(nameof(model.LiquidAddress), 
-                    "Invalid Liquid address format. Please enter a valid Liquid network address (ex1..., lq1..., or legacy format starting with G, H, V, or W).");
+                ModelState.AddModelError(nameof(model.LiquidAddress), liquidValidation.ErrorMessage!);
                 return View(model);
             }
         }
