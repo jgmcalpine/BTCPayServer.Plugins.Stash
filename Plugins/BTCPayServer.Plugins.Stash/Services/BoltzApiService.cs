@@ -15,11 +15,14 @@ namespace BTCPayServer.Plugins.Stash.Services;
 /// <summary>
 /// Service for interacting with the Boltz API v2.
 /// Handles reverse submarine swaps: Lightning BTC -> Liquid USDT
+/// 
+/// Supports mock mode for regtest testing via STASH_MOCK_BOLTZ=true environment variable.
 /// </summary>
 public class BoltzApiService
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly BTCPayServerEnvironment _environment;
+    private readonly MockBoltzOptions? _mockOptions;
     private readonly ILogger<BoltzApiService> _logger;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -32,25 +35,42 @@ public class BoltzApiService
     public BoltzApiService(
         IHttpClientFactory httpClientFactory,
         BTCPayServerEnvironment environment,
-        ILogger<BoltzApiService> logger)
+        ILogger<BoltzApiService> logger,
+        MockBoltzOptions? mockOptions = null)
     {
         _httpClientFactory = httpClientFactory;
         _environment = environment;
         _logger = logger;
+        _mockOptions = mockOptions;
     }
 
     /// <summary>
-    /// Gets the Boltz API base URL based on the current network.
+    /// Whether the service is using the mock Boltz server.
+    /// </summary>
+    public bool IsMockMode => _mockOptions?.Enabled == true && 
+                              _environment.NetworkType == NBitcoin.ChainName.Regtest;
+
+    /// <summary>
+    /// Gets the Boltz API base URL based on the current network and mock settings.
     /// </summary>
     private string GetBaseUrl()
     {
+        // Use mock server for regtest when enabled
+        if (_mockOptions?.Enabled == true && 
+            _environment.NetworkType == NBitcoin.ChainName.Regtest)
+        {
+            var mockUrl = $"http://localhost:{_mockOptions.Port}";
+            _logger.LogDebug("Using mock Boltz server at {Url}", mockUrl);
+            return mockUrl;
+        }
+
         // Boltz uses the same API for mainnet and testnet, but different endpoints
         // Mainnet: https://api.boltz.exchange
         // Testnet: https://api.testnet.boltz.exchange
         if (_environment.NetworkType == NBitcoin.ChainName.Mainnet)
             return "https://api.boltz.exchange";
         
-        // For testnet and regtest, use testnet API
+        // For testnet and regtest (without mock), use testnet API
         return "https://api.testnet.boltz.exchange";
     }
 

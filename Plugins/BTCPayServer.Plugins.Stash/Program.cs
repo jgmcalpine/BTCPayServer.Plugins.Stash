@@ -30,6 +30,29 @@ public class StashPlugin : BaseBTCPayServerPlugin
         });
         serviceCollection.AddHostedService<PluginMigrationRunner>();
 
+        // Configure Mock Boltz server for regtest testing
+        // Enable via: STASH_MOCK_BOLTZ=true
+        var mockBoltzEnabled = string.Equals(
+            Environment.GetEnvironmentVariable("STASH_MOCK_BOLTZ"), 
+            "true", 
+            StringComparison.OrdinalIgnoreCase);
+        
+        var mockBoltzOptions = new MockBoltzOptions
+        {
+            Enabled = mockBoltzEnabled,
+            Port = int.TryParse(Environment.GetEnvironmentVariable("STASH_MOCK_BOLTZ_PORT"), out var port) 
+                ? port 
+                : 9999,
+            SwapProgressDelayMs = int.TryParse(Environment.GetEnvironmentVariable("STASH_MOCK_BOLTZ_DELAY"), out var delay) 
+                ? delay 
+                : 2000,
+            SimulateFailure = string.Equals(
+                Environment.GetEnvironmentVariable("STASH_MOCK_BOLTZ_FAIL"), 
+                "true", 
+                StringComparison.OrdinalIgnoreCase)
+        };
+        serviceCollection.AddSingleton(mockBoltzOptions);
+
         // Add HTTP client for Boltz API
         serviceCollection.AddHttpClient("Boltz", client =>
         {
@@ -42,6 +65,12 @@ public class StashPlugin : BaseBTCPayServerPlugin
         serviceCollection.AddSingleton<AllocationService>();
         serviceCollection.AddSingleton<BatchExecutionService>();
         serviceCollection.AddSingleton<BoltzApiService>();
+
+        // Add mock Boltz server (only runs if enabled)
+        if (mockBoltzEnabled)
+        {
+            serviceCollection.AddHostedService<MockBoltzServer>();
+        }
 
         // Invoice watcher (listens for settled invoices)
         serviceCollection.AddSingleton<InvoiceWatcherService>();
