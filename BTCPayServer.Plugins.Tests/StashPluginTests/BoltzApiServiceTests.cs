@@ -153,7 +153,7 @@ public class BoltzApiServiceTests
     }
 
     [Fact]
-    public async Task GetReverseQuoteAsync_ReturnsNull_WhenApiReturnsError()
+    public async Task GetReverseQuoteAsync_ThrowsException_WhenApiReturnsError()
     {
         // Arrange
         var mockHttp = new MockHttpMessageHandler();
@@ -164,11 +164,10 @@ public class BoltzApiServiceTests
 
         var service = TestHelpers.CreateBoltzApiService(mockHttp);
 
-        // Act
-        var result = await service.GetReverseQuoteAsync(100);
-
-        // Assert
-        Assert.Null(result);
+        // Act & Assert - now throws BoltzApiException instead of returning null
+        var exception = await Assert.ThrowsAsync<BoltzApiException>(
+            () => service.GetReverseQuoteAsync(100));
+        Assert.Contains("Amount too small", exception.Message);
     }
 
     [Fact]
@@ -354,22 +353,21 @@ public class BoltzApiServiceTests
     }
 
     [Fact]
-    public async Task GetSwapStatusAsync_ReturnsNull_WhenSwapNotFound()
+    public async Task GetSwapStatusAsync_ThrowsException_WhenSwapNotFound()
     {
         // Arrange
         var mockHttp = new MockHttpMessageHandler();
         
         mockHttp
             .When("https://api.testnet.boltz.exchange/v2/swap/*")
-            .Respond(HttpStatusCode.NotFound);
+            .Respond(HttpStatusCode.NotFound, "application/json", "{\"error\": \"Swap not found\"}");
 
         var service = TestHelpers.CreateBoltzApiService(mockHttp);
 
-        // Act
-        var result = await service.GetSwapStatusAsync("nonexistent-swap");
-
-        // Assert
-        Assert.Null(result);
+        // Act & Assert - now throws BoltzApiException instead of returning null
+        var exception = await Assert.ThrowsAsync<BoltzApiException>(
+            () => service.GetSwapStatusAsync("nonexistent-swap"));
+        Assert.Equal(HttpStatusCode.NotFound, exception.StatusCode);
     }
 
     [Theory]

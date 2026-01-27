@@ -108,7 +108,7 @@ public class SwapExecutionFlowTests
         for (int i = 0; i < 5; i++)
         {
             var status = await service.GetSwapStatusAsync(swap.Id);
-            if (status != null && BoltzSwapStatus.IsFinalState(status.Status))
+            if (BoltzSwapStatus.IsFinalState(status.Status))
             {
                 finalStatus = status;
                 break;
