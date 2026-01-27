@@ -282,6 +282,127 @@ public class DatabaseIntegrationTests : IDisposable
 
     #endregion
 
+    #region BatchExecutionService Integration Tests
+
+    [Fact]
+    public async Task CreateBatchAsync_CreatesAtomicBatchAndLinksAllocations()
+    {
+        // Arrange - Create allocations first
+        var loggerAlloc = Mock.Of<ILogger<AllocationService>>();
+        var allocationService = new AllocationService(_dbContextFactory, loggerAlloc);
+
+        var allocation1 = await allocationService.CreateAllocationAsync(
+            "store-atomic-test", "invoice-a1", "BTC-LN", 100000, 20m, 50000m, "USD");
+        var allocation2 = await allocationService.CreateAllocationAsync(
+            "store-atomic-test", "invoice-a2", "BTC-LN", 150000, 20m, 50000m, "USD");
+
+        var allocations = new List<PendingAllocation> { allocation1, allocation2 };
+
+        // Create a minimal BatchExecutionService with mocked dependencies
+        var mockBatchService = CreateMinimalBatchExecutionService();
+
+        // Act - Create batch (this uses the execution strategy internally)
+        var batch = await mockBatchService.CreateBatchAsync(
+            storeId: "store-atomic-test",
+            executionType: BatchExecutionType.ColdStorage,
+            allocations: allocations,
+            destinationAddress: "bc1qtest...",
+            currentExchangeRate: 50000m,
+            fiatCurrency: "USD");
+
+        // Assert - Batch was created
+        Assert.NotNull(batch);
+        Assert.Equal("store-atomic-test", batch.StoreId);
+        Assert.Equal(BatchStatus.Pending, batch.Status);
+        Assert.Equal(50000, batch.TotalSats); // 20000 + 30000
+
+        // Assert - Allocations are linked to the batch
+        await using var db = _dbContextFactory.CreateContext();
+        var linkedAllocations = await db.PendingAllocations
+            .Where(a => a.ExecutedBatchId == batch.Id)
+            .ToListAsync();
+
+        Assert.Equal(2, linkedAllocations.Count);
+        Assert.All(linkedAllocations, a => Assert.False(a.IsExecuted)); // Not executed yet
+    }
+
+    [Fact]
+    public async Task CreateBatchAsync_WorksWithExecutionStrategy()
+    {
+        // This test verifies that CreateBatchAsync works correctly when
+        // the database uses an execution strategy (like NpgsqlRetryingExecutionStrategy).
+        // The fix wraps the transaction in CreateExecutionStrategy().ExecuteAsync().
+        
+        // Arrange
+        var loggerAlloc = Mock.Of<ILogger<AllocationService>>();
+        var allocationService = new AllocationService(_dbContextFactory, loggerAlloc);
+
+        var allocation = await allocationService.CreateAllocationAsync(
+            "store-strategy-test", "invoice-strategy", "BTC-LN", 500000, 10m, 60000m, "USD");
+
+        var mockBatchService = CreateMinimalBatchExecutionService();
+
+        // Act - This should not throw InvalidOperationException about execution strategy
+        var batch = await mockBatchService.CreateBatchAsync(
+            storeId: "store-strategy-test",
+            executionType: BatchExecutionType.LiquidSwap,
+            allocations: new List<PendingAllocation> { allocation },
+            destinationAddress: "tex1qtest...",
+            currentExchangeRate: 60000m,
+            fiatCurrency: "USD");
+
+        // Assert
+        Assert.NotNull(batch);
+        Assert.Equal(50000, batch.TotalSats); // 10% of 500000
+        Assert.Equal(30m, batch.FiatValueAtExecution, 2); // 50000 sats at $60k = $30
+
+        // Verify the batch is persisted
+        await using var db = _dbContextFactory.CreateContext();
+        var persistedBatch = await db.ExecutedBatches.FindAsync(batch.Id);
+        Assert.NotNull(persistedBatch);
+    }
+
+    /// <summary>
+    /// Creates a BatchExecutionService with minimal mocked dependencies.
+    /// Only the PluginDbContextFactory is real; other dependencies are mocked
+    /// to avoid needing the full BTCPay Server infrastructure.
+    /// </summary>
+    private BatchExecutionService CreateMinimalBatchExecutionService()
+    {
+        var mockEnvironment = new Mock<BTCPayServer.Configuration.BTCPayServerEnvironment>();
+        mockEnvironment.Setup(e => e.NetworkType).Returns(NBitcoin.ChainName.Regtest);
+
+        var mockStoreRepo = Mock.Of<BTCPayServer.Services.Stores.StoreRepository>();
+        var mockNetworkProvider = Mock.Of<BTCPayServer.BTCPayNetworkProvider>();
+        var mockExplorerProvider = Mock.Of<NBXplorer.ExplorerClientProvider>();
+        var mockWalletProvider = Mock.Of<BTCPayServer.Services.Wallets.BTCPayWalletProvider>();
+        var mockHandlers = Mock.Of<BTCPayServer.Payments.PaymentMethodHandlerDictionary>();
+        var mockFeeProvider = Mock.Of<BTCPayServer.Services.IFeeProviderFactory>();
+        var mockBoltzApi = Mock.Of<IBoltzApiService>();
+        var mockAddressValidator = Mock.Of<IAddressValidator>();
+        var mockLightningFactory = Mock.Of<BTCPayServer.Payments.Lightning.LightningClientFactoryService>();
+        var mockLightningOptions = Microsoft.Extensions.Options.Options.Create(
+            new BTCPayServer.Configuration.LightningNetworkOptions());
+        var mockLogger = Mock.Of<ILogger<BatchExecutionService>>();
+
+        return new BatchExecutionService(
+            _dbContextFactory,
+            mockEnvironment.Object,
+            mockStoreRepo,
+            mockNetworkProvider,
+            mockExplorerProvider,
+            mockWalletProvider,
+            mockHandlers,
+            mockFeeProvider,
+            mockBoltzApi,
+            mockAddressValidator,
+            mockLightningFactory,
+            mockLightningOptions,
+            mockLogger);
+    }
+
+    #endregion
+
     #region Settings Tests
 
     [Fact]

@@ -85,6 +85,7 @@ public class BatchExecutionService(
     /// <summary>
     /// Creates a new batch execution record and links allocations to it.
     /// Allocations are linked immediately (ExecutedBatchId set) but IsExecuted remains false until batch succeeds.
+    /// Uses execution strategy to support PostgreSQL's NpgsqlRetryingExecutionStrategy.
     /// </summary>
     public async Task<ExecutedBatch> CreateBatchAsync(
         string storeId,
@@ -112,64 +113,76 @@ public class BatchExecutionService(
         }
 
         await using var db = dbContextFactory.CreateContext();
-        await using var transaction = await db.Database.BeginTransactionAsync();
-
-        try
+        
+        // Use execution strategy to properly handle retry logic with transactions
+        // This is required for PostgreSQL's NpgsqlRetryingExecutionStrategy
+        var strategy = db.Database.CreateExecutionStrategy();
+        
+        ExecutedBatch? resultBatch = null;
+        var allocationIds = allocations.Select(a => a.Id).ToList();
+        
+        await strategy.ExecuteAsync(async () =>
         {
-            var fiatValue = (totalSats / 100_000_000m) * currentExchangeRate;
+            await using var transaction = await db.Database.BeginTransactionAsync();
 
-            // Calculate weighted average cost basis (safe now that we've validated totalSats > 0)
-            var weightedCostBasis = allocations.Sum(a => a.AllocatedSats * a.ExchangeRateAtReceipt) 
-                                    / (decimal)totalSats;
-
-            var batch = new ExecutedBatch
+            try
             {
-                StoreId = storeId,
-                ExecutionType = executionType,
-                Status = BatchStatus.Pending,
-                TotalSats = totalSats,
-                FeeSats = 0, // Will be updated after execution
-                NetSats = totalSats,
-                FiatValueAtExecution = fiatValue,
-                FiatCurrency = fiatCurrency,
-                ExchangeRateAtExecution = currentExchangeRate,
-                WeightedAverageCostBasis = weightedCostBasis,
-                DestinationAddress = destinationAddress,
-                AllocationCount = allocations.Count,
-                InitiatedAt = DateTimeOffset.UtcNow
-            };
+                var fiatValue = (totalSats / 100_000_000m) * currentExchangeRate;
 
-            db.ExecutedBatches.Add(batch);
-            await db.SaveChangesAsync();
+                // Calculate weighted average cost basis (safe now that we've validated totalSats > 0)
+                var weightedCostBasis = allocations.Sum(a => a.AllocatedSats * a.ExchangeRateAtReceipt) 
+                                        / (decimal)totalSats;
 
-            // Link allocations to this batch immediately (but don't mark as executed yet)
-            // This ensures we know which allocations belong to this batch even if it fails
-            var allocationIds = allocations.Select(a => a.Id).ToList();
-            var dbAllocations = await db.PendingAllocations
-                .Where(a => allocationIds.Contains(a.Id))
-                .ToListAsync();
-            
-            foreach (var allocation in dbAllocations)
-            {
-                allocation.ExecutedBatchId = batch.Id;
-                // IsExecuted remains false until batch succeeds
+                var batch = new ExecutedBatch
+                {
+                    StoreId = storeId,
+                    ExecutionType = executionType,
+                    Status = BatchStatus.Pending,
+                    TotalSats = totalSats,
+                    FeeSats = 0, // Will be updated after execution
+                    NetSats = totalSats,
+                    FiatValueAtExecution = fiatValue,
+                    FiatCurrency = fiatCurrency,
+                    ExchangeRateAtExecution = currentExchangeRate,
+                    WeightedAverageCostBasis = weightedCostBasis,
+                    DestinationAddress = destinationAddress,
+                    AllocationCount = allocations.Count,
+                    InitiatedAt = DateTimeOffset.UtcNow
+                };
+
+                db.ExecutedBatches.Add(batch);
+                await db.SaveChangesAsync();
+
+                // Link allocations to this batch immediately (but don't mark as executed yet)
+                // This ensures we know which allocations belong to this batch even if it fails
+                var dbAllocations = await db.PendingAllocations
+                    .Where(a => allocationIds.Contains(a.Id))
+                    .ToListAsync();
+                
+                foreach (var allocation in dbAllocations)
+                {
+                    allocation.ExecutedBatchId = batch.Id;
+                    // IsExecuted remains false until batch succeeds
+                }
+                await db.SaveChangesAsync();
+
+                // Commit the transaction - batch and allocation links are now atomic
+                await transaction.CommitAsync();
+
+                logger.LogInformation(
+                    "Created batch {BatchId} for store {StoreId}: {TotalSats} sats ({FiatValue} {Currency}), linked {Count} allocations",
+                    batch.Id, storeId, totalSats, fiatValue, fiatCurrency, dbAllocations.Count);
+
+                resultBatch = batch;
             }
-            await db.SaveChangesAsync();
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
+        });
 
-            // Commit the transaction - batch and allocation links are now atomic
-            await transaction.CommitAsync();
-
-            logger.LogInformation(
-                "Created batch {BatchId} for store {StoreId}: {TotalSats} sats ({FiatValue} {Currency}), linked {Count} allocations",
-                batch.Id, storeId, totalSats, fiatValue, fiatCurrency, dbAllocations.Count);
-
-            return batch;
-        }
-        catch
-        {
-            await transaction.RollbackAsync();
-            throw;
-        }
+        return resultBatch!;
     }
 
     /// <summary>
