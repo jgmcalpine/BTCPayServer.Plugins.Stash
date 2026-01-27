@@ -27,7 +27,7 @@ public class CoreServiceTests
         var invoiceAmount = 100000L;
 
         // Act
-        var result = QuoteValidationHelper.ValidateQuoteResponse(quote, invoiceAmount);
+        var result = QuoteValidator.ValidateQuoteResponse(quote, invoiceAmount);
 
         // Assert
         Assert.True(result.IsValid);
@@ -46,7 +46,7 @@ public class CoreServiceTests
         };
 
         // Act
-        var result = QuoteValidationHelper.ValidateQuoteResponse(quote, 100000);
+        var result = QuoteValidator.ValidateQuoteResponse(quote, 100000);
 
         // Assert
         Assert.False(result.IsValid);
@@ -65,7 +65,7 @@ public class CoreServiceTests
         };
 
         // Act
-        var result = QuoteValidationHelper.ValidateQuoteResponse(quote, 100000);
+        var result = QuoteValidator.ValidateQuoteResponse(quote, 100000);
 
         // Assert
         Assert.False(result.IsValid);
@@ -84,7 +84,7 @@ public class CoreServiceTests
         };
 
         // Act
-        var result = QuoteValidationHelper.ValidateQuoteResponse(quote, 100000);
+        var result = QuoteValidator.ValidateQuoteResponse(quote, 100000);
 
         // Assert
         Assert.False(result.IsValid);
@@ -103,7 +103,7 @@ public class CoreServiceTests
         };
 
         // Act
-        var result = QuoteValidationHelper.ValidateQuoteResponse(quote, 100000);
+        var result = QuoteValidator.ValidateQuoteResponse(quote, 100000);
 
         // Assert
         Assert.False(result.IsValid);
@@ -123,7 +123,7 @@ public class CoreServiceTests
         };
 
         // Act
-        var result = QuoteValidationHelper.ValidateQuoteResponse(quote, 100000);
+        var result = QuoteValidator.ValidateQuoteResponse(quote, 100000);
 
         // Assert
         Assert.False(result.IsValid);
@@ -142,7 +142,7 @@ public class CoreServiceTests
         };
 
         // Act
-        var result = QuoteValidationHelper.ValidateQuoteResponse(quote, 100000);
+        var result = QuoteValidator.ValidateQuoteResponse(quote, 100000);
 
         // Assert
         Assert.False(result.IsValid);
@@ -161,7 +161,7 @@ public class CoreServiceTests
         };
 
         // Act
-        var result = QuoteValidationHelper.ValidateQuoteResponse(quote, 100000);
+        var result = QuoteValidator.ValidateQuoteResponse(quote, 100000);
 
         // Assert
         Assert.False(result.IsValid);
@@ -187,7 +187,7 @@ public class CoreServiceTests
         };
 
         // Act
-        var result = QuoteValidationHelper.ValidateQuoteResponse(quote, invoiceAmount);
+        var result = QuoteValidator.ValidateQuoteResponse(quote, invoiceAmount);
 
         // Assert
         Assert.True(result.IsValid, result.ErrorMessage);
@@ -426,55 +426,4 @@ public class CoreServiceTests
     }
 
     #endregion
-}
-
-/// <summary>
-/// Helper class to expose quote validation logic for testing.
-/// In the real implementation this is a private method in BatchExecutionService.
-/// </summary>
-public static class QuoteValidationHelper
-{
-    public static QuoteValidationResult ValidateQuoteResponse(BoltzReverseQuoteResponse quote, long invoiceAmount)
-    {
-        // Check for negative or zero onchain amount
-        if (quote.OnchainAmount <= 0)
-        {
-            return new QuoteValidationResult(false, 
-                $"Invalid quote: onchain amount ({quote.OnchainAmount}) must be positive.");
-        }
-
-        // Check for negative fees
-        if (quote.MinerFee < 0 || quote.ServiceFee < 0)
-        {
-            return new QuoteValidationResult(false, 
-                $"Invalid quote: fees cannot be negative (miner: {quote.MinerFee}, service: {quote.ServiceFee}).");
-        }
-
-        // Check that fees don't exceed the invoice amount
-        var totalFees = quote.MinerFee + quote.ServiceFee;
-        if (totalFees >= invoiceAmount)
-        {
-            return new QuoteValidationResult(false, 
-                $"Invalid quote: total fees ({totalFees}) exceed invoice amount ({invoiceAmount}).");
-        }
-
-        // Check that onchain amount + fees roughly equals invoice amount (within 1% tolerance for rounding)
-        var expectedOnchain = invoiceAmount - totalFees;
-        var tolerance = invoiceAmount * 0.01m; // 1% tolerance
-        if (Math.Abs(quote.OnchainAmount - expectedOnchain) > tolerance)
-        {
-            return new QuoteValidationResult(false, 
-                $"Invalid quote: onchain amount ({quote.OnchainAmount}) doesn't match expected ({expectedOnchain}) after fees.");
-        }
-
-        // Check for unreasonably high fee percentage (>10% is suspicious)
-        var feePercentage = (totalFees * 100m) / invoiceAmount;
-        if (feePercentage > 10)
-        {
-            return new QuoteValidationResult(false, 
-                $"Invalid quote: fee percentage ({feePercentage:F2}%) is unreasonably high.");
-        }
-
-        return new QuoteValidationResult(true, null);
-    }
 }

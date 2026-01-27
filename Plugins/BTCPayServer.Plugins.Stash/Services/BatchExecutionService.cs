@@ -36,39 +36,12 @@ public class BatchExecutionService(
     BTCPayWalletProvider walletProvider,
     PaymentMethodHandlerDictionary handlers,
     IFeeProviderFactory feeProviderFactory,
-    BoltzApiService boltzApiService,
+    IBoltzApiService boltzApiService,
+    IAddressValidator addressValidator,
     LightningClientFactoryService lightningClientFactory,
     IOptions<LightningNetworkOptions> lightningNetworkOptions,
     ILogger<BatchExecutionService> logger)
 {
-    // Bitcoin address regex patterns
-    private static readonly Regex BtcMainnetAddressRegex = new(
-        @"^(bc1[a-zA-HJ-NP-Z0-9]{25,87}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$",
-        RegexOptions.Compiled);
-
-    private static readonly Regex BtcTestnetAddressRegex = new(
-        @"^(tb1[a-zA-HJ-NP-Z0-9]{25,87}|[2mn][a-km-zA-HJ-NP-Z1-9]{25,34})$",
-        RegexOptions.Compiled);
-
-    private static readonly Regex BtcRegtestAddressRegex = new(
-        @"^(bcrt1[a-zA-HJ-NP-Z0-9]{25,87}|[2mn][a-km-zA-HJ-NP-Z1-9]{25,34})$",
-        RegexOptions.Compiled);
-
-    private static readonly Regex XpubRegex = new(
-        @"^([xyztuvXYZTUV]pub[a-zA-HJ-NP-Z0-9]{100,120})$",
-        RegexOptions.Compiled);
-
-    // Liquid address regex patterns
-    // Mainnet: ex1... (blech32), lq1... (blech32m), or confidential addresses starting with VJL, VTp, etc.
-    private static readonly Regex LiquidMainnetAddressRegex = new(
-        @"^(ex1[a-zA-HJ-NP-Z0-9]{25,120}|lq1[a-zA-HJ-NP-Z0-9]{25,120}|VJL[a-km-zA-HJ-NP-Z1-9]{76,100}|VTp[a-km-zA-HJ-NP-Z1-9]{76,100}|[GHVW][a-km-zA-HJ-NP-Z1-9]{25,34})$",
-        RegexOptions.Compiled);
-
-    // Testnet/Regtest: tex1... (blech32), tlq1... (blech32m)
-    private static readonly Regex LiquidTestnetAddressRegex = new(
-        @"^(tex1[a-zA-HJ-NP-Z0-9]{25,120}|tlq1[a-zA-HJ-NP-Z0-9]{25,120}|ert1[a-zA-HJ-NP-Z0-9]{25,120}|el1[a-zA-HJ-NP-Z0-9]{25,120})$",
-        RegexOptions.Compiled);
-
     /// <summary>
     /// Gets the current network type.
     /// </summary>
@@ -76,139 +49,38 @@ public class BatchExecutionService(
 
     /// <summary>
     /// Validates a Bitcoin address based on the current network environment.
+    /// Delegates to IAddressValidator for actual validation.
     /// </summary>
     public AddressValidationResult ValidateBitcoinAddressForNetwork(string address)
-    {
-        if (string.IsNullOrWhiteSpace(address))
-            return new AddressValidationResult(false, "Address is required.");
-
-        var networkType = environment.NetworkType;
-        var expectedNetworkName = GetNetworkDisplayName(networkType);
-
-        // Check if it's an XPUB (valid on all networks)
-        if (ValidateXpub(address))
-            return new AddressValidationResult(true, null);
-
-        // Determine which network the address belongs to
-        var isMainnetAddress = BtcMainnetAddressRegex.IsMatch(address);
-        var isTestnetAddress = BtcTestnetAddressRegex.IsMatch(address);
-        var isRegtestAddress = BtcRegtestAddressRegex.IsMatch(address);
-
-        // Validate against current network using if-else (ChainName is a struct, can't use switch pattern matching)
-        if (networkType == ChainName.Mainnet)
-        {
-            if (isMainnetAddress)
-                return new AddressValidationResult(true, null);
-            if (isTestnetAddress || isRegtestAddress)
-                return new AddressValidationResult(false, 
-                    $"This appears to be a testnet/regtest address, but you are running on {expectedNetworkName}. Please use a mainnet address (starting with bc1, 1, or 3).");
-        }
-        else if (networkType == ChainName.Testnet)
-        {
-            if (isTestnetAddress)
-                return new AddressValidationResult(true, null);
-            if (isMainnetAddress)
-                return new AddressValidationResult(false, 
-                    $"This appears to be a mainnet address, but you are running on {expectedNetworkName}. Please use a testnet address (starting with tb1, m, n, or 2).");
-            if (isRegtestAddress)
-                return new AddressValidationResult(false, 
-                    $"This appears to be a regtest address, but you are running on {expectedNetworkName}. Please use a testnet address (starting with tb1, m, n, or 2).");
-        }
-        else if (networkType == ChainName.Regtest)
-        {
-            if (isRegtestAddress)
-                return new AddressValidationResult(true, null);
-            if (isMainnetAddress)
-                return new AddressValidationResult(false, 
-                    $"This appears to be a mainnet address, but you are running on {expectedNetworkName}. Please use a regtest address (starting with bcrt1, m, n, or 2).");
-            if (isTestnetAddress)
-                return new AddressValidationResult(false, 
-                    $"This appears to be a testnet address, but you are running on {expectedNetworkName}. Please use a regtest address (starting with bcrt1, m, n, or 2).");
-        }
-
-        return new AddressValidationResult(false, 
-            $"Invalid Bitcoin address format. Please enter a valid {expectedNetworkName} address.");
-    }
+        => addressValidator.ValidateBitcoinAddressForNetwork(address);
 
     /// <summary>
     /// Validates a Bitcoin address (legacy method for backwards compatibility).
+    /// Delegates to IAddressValidator for actual validation.
     /// </summary>
     public bool ValidateBitcoinAddress(string address, bool isTestnet = false)
-    {
-        if (string.IsNullOrWhiteSpace(address))
-            return false;
-
-        if (isTestnet)
-            return BtcTestnetAddressRegex.IsMatch(address) || BtcRegtestAddressRegex.IsMatch(address);
-        
-        return BtcMainnetAddressRegex.IsMatch(address);
-    }
+        => addressValidator.ValidateBitcoinAddress(address, isTestnet);
 
     /// <summary>
     /// Validates an XPUB.
+    /// Delegates to IAddressValidator for actual validation.
     /// </summary>
     public bool ValidateXpub(string xpub)
-    {
-        if (string.IsNullOrWhiteSpace(xpub))
-            return false;
-
-        return XpubRegex.IsMatch(xpub);
-    }
+        => addressValidator.ValidateXpub(xpub);
 
     /// <summary>
     /// Validates a Liquid address based on the current network environment.
+    /// Delegates to IAddressValidator for actual validation.
     /// </summary>
     public AddressValidationResult ValidateLiquidAddressForNetwork(string address)
-    {
-        if (string.IsNullOrWhiteSpace(address))
-            return new AddressValidationResult(false, "Liquid address is required.");
-
-        var networkType = environment.NetworkType;
-        var isMainnetAddress = LiquidMainnetAddressRegex.IsMatch(address);
-        var isTestnetAddress = LiquidTestnetAddressRegex.IsMatch(address);
-
-        if (networkType == ChainName.Mainnet)
-        {
-            if (isMainnetAddress)
-                return new AddressValidationResult(true, null);
-            if (isTestnetAddress)
-                return new AddressValidationResult(false,
-                    "This appears to be a testnet Liquid address, but you are running on mainnet. Please use a mainnet Liquid address (starting with ex1, lq1, or VJL/VTp).");
-        }
-        else // Testnet or Regtest
-        {
-            if (isTestnetAddress)
-                return new AddressValidationResult(true, null);
-            if (isMainnetAddress)
-                return new AddressValidationResult(false,
-                    "This appears to be a mainnet Liquid address, but you are running on testnet. Please use a testnet Liquid address (starting with tex1, tlq1, ert1, or el1).");
-        }
-
-        return new AddressValidationResult(false,
-            "Invalid Liquid address format. Please enter a valid Liquid network address.");
-    }
+        => addressValidator.ValidateLiquidAddressForNetwork(address);
 
     /// <summary>
     /// Validates a Liquid address (legacy method for backwards compatibility).
+    /// Delegates to IAddressValidator for actual validation.
     /// </summary>
     public bool ValidateLiquidAddress(string address)
-    {
-        if (string.IsNullOrWhiteSpace(address))
-            return false;
-
-        return LiquidMainnetAddressRegex.IsMatch(address) || LiquidTestnetAddressRegex.IsMatch(address);
-    }
-
-    private static string GetNetworkDisplayName(ChainName network)
-    {
-        if (network == ChainName.Mainnet)
-            return "mainnet";
-        if (network == ChainName.Testnet)
-            return "testnet";
-        if (network == ChainName.Regtest)
-            return "regtest";
-        return network.ToString().ToLowerInvariant();
-    }
+        => addressValidator.ValidateLiquidAddress(address);
 
     /// <summary>
     /// Creates a new batch execution record and links allocations to it.
@@ -302,74 +174,10 @@ public class BatchExecutionService(
 
     /// <summary>
     /// Validates destination address before batch execution.
+    /// Delegates to IAddressValidator for actual validation.
     /// </summary>
     public AddressValidationResult ValidateDestinationForExecution(StashSettings settings)
-    {
-        if (settings.DestinationType == StashDestinationType.ColdStorage)
-        {
-            if (string.IsNullOrWhiteSpace(settings.DestinationAddress))
-                return new AddressValidationResult(false, "No destination address configured. Please configure a Bitcoin address in your Stash settings.");
-
-            return ValidateBitcoinAddressForNetwork(settings.DestinationAddress);
-        }
-        else if (settings.DestinationType == StashDestinationType.LiquidSwap)
-        {
-            if (string.IsNullOrWhiteSpace(settings.LiquidAddress))
-                return new AddressValidationResult(false, "No Liquid address configured. Please configure a Liquid address in your Stash settings.");
-
-            return ValidateLiquidAddressForNetwork(settings.LiquidAddress);
-        }
-
-        return new AddressValidationResult(true, null);
-    }
-
-    /// <summary>
-    /// Validates a Boltz quote response to ensure values are reasonable.
-    /// Protects against malicious or buggy API responses.
-    /// </summary>
-    private static QuoteValidationResult ValidateQuoteResponse(BoltzReverseQuoteResponse quote, long invoiceAmount)
-    {
-        // Check for negative or zero onchain amount
-        if (quote.OnchainAmount <= 0)
-        {
-            return new QuoteValidationResult(false, 
-                $"Invalid quote: onchain amount ({quote.OnchainAmount}) must be positive.");
-        }
-
-        // Check for negative fees
-        if (quote.MinerFee < 0 || quote.ServiceFee < 0)
-        {
-            return new QuoteValidationResult(false, 
-                $"Invalid quote: fees cannot be negative (miner: {quote.MinerFee}, service: {quote.ServiceFee}).");
-        }
-
-        // Check that fees don't exceed the invoice amount
-        var totalFees = quote.MinerFee + quote.ServiceFee;
-        if (totalFees >= invoiceAmount)
-        {
-            return new QuoteValidationResult(false, 
-                $"Invalid quote: total fees ({totalFees}) exceed invoice amount ({invoiceAmount}).");
-        }
-
-        // Check that onchain amount + fees roughly equals invoice amount (within 1% tolerance for rounding)
-        var expectedOnchain = invoiceAmount - totalFees;
-        var tolerance = invoiceAmount * 0.01m; // 1% tolerance
-        if (Math.Abs(quote.OnchainAmount - expectedOnchain) > tolerance)
-        {
-            return new QuoteValidationResult(false, 
-                $"Invalid quote: onchain amount ({quote.OnchainAmount}) doesn't match expected ({expectedOnchain}) after fees.");
-        }
-
-        // Check for unreasonably high fee percentage (>10% is suspicious)
-        var feePercentage = (totalFees * 100m) / invoiceAmount;
-        if (feePercentage > 10)
-        {
-            return new QuoteValidationResult(false, 
-                $"Invalid quote: fee percentage ({feePercentage:F2}%) is unreasonably high.");
-        }
-
-        return new QuoteValidationResult(true, null);
-    }
+        => addressValidator.ValidateDestinationForExecution(settings);
 
     /// <summary>
     /// Executes a cold storage sweep (on-chain transaction).
@@ -701,7 +509,7 @@ public class BatchExecutionService(
                 quote.OnchainAmount, quote.MinerFee, quote.ServiceFee);
 
             // Validate quote values to protect against malicious or buggy API responses
-            var quoteValidation = ValidateQuoteResponse(quote, batch.TotalSats);
+            var quoteValidation = QuoteValidator.ValidateQuoteResponse(quote, batch.TotalSats);
             if (!quoteValidation.IsValid)
             {
                 logger.LogWarning(

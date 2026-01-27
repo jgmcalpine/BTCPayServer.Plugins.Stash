@@ -90,37 +90,6 @@ public class DatabaseIntegrationTests : IDisposable
         Assert.Equal(first.AllocatedSats, second.AllocatedSats);
     }
 
-    [Fact(Skip = "SQLite does not support DateTimeOffset in ORDER BY - works in PostgreSQL production")]
-    public async Task GetPendingAllocationsAsync_ReturnsOnlyUnexecuted()
-    {
-        // Arrange
-        var logger = Mock.Of<ILogger<AllocationService>>();
-        var service = new AllocationService(_dbContextFactory, logger);
-
-        // Create some allocations
-        var alloc1 = await service.CreateAllocationAsync(
-            "store-1", "invoice-pending-1", "BTC-LN", 100000, 20m, 50000m, "USD");
-        var alloc2 = await service.CreateAllocationAsync(
-            "store-1", "invoice-pending-2", "BTC-LN", 100000, 20m, 50000m, "USD");
-        var alloc3 = await service.CreateAllocationAsync(
-            "store-1", "invoice-executed", "BTC-LN", 100000, 20m, 50000m, "USD");
-
-        // Mark one as executed
-        await using var db = _dbContextFactory.CreateContext();
-        var execAlloc = await db.PendingAllocations.FindAsync(alloc3.Id);
-        execAlloc!.IsExecuted = true;
-        await db.SaveChangesAsync();
-
-        // Act
-        var pending = await service.GetPendingAllocationsAsync("store-1");
-
-        // Assert
-        Assert.Equal(2, pending.Count);
-        Assert.Contains(pending, a => a.Id == alloc1.Id);
-        Assert.Contains(pending, a => a.Id == alloc2.Id);
-        Assert.DoesNotContain(pending, a => a.Id == alloc3.Id);
-    }
-
     [Fact]
     public async Task GetPendingTotalsAsync_ReturnsSumOfPendingAllocations()
     {
@@ -139,56 +108,6 @@ public class DatabaseIntegrationTests : IDisposable
         // Assert
         Assert.Equal(60000, totalSats); // 20000 + 40000
         Assert.Equal(2, count);
-    }
-
-    [Fact(Skip = "SQLite enforces FK constraints differently than PostgreSQL - works in production")]
-    public async Task MarkAllocationsExecutedAsync_UpdatesAllocations()
-    {
-        // Arrange
-        var logger = Mock.Of<ILogger<AllocationService>>();
-        var service = new AllocationService(_dbContextFactory, logger);
-
-        var alloc1 = await service.CreateAllocationAsync(
-            "store-mark", "invoice-m1", "BTC-LN", 100000, 20m, 50000m, "USD");
-        var alloc2 = await service.CreateAllocationAsync(
-            "store-mark", "invoice-m2", "BTC-LN", 100000, 20m, 50000m, "USD");
-
-        // Act
-        await service.MarkAllocationsExecutedAsync(
-            new List<string> { alloc1.Id, alloc2.Id }, 
-            "batch-123");
-
-        // Assert
-        await using var db = _dbContextFactory.CreateContext();
-        var updated1 = await db.PendingAllocations.FindAsync(alloc1.Id);
-        var updated2 = await db.PendingAllocations.FindAsync(alloc2.Id);
-
-        Assert.True(updated1!.IsExecuted);
-        Assert.True(updated2!.IsExecuted);
-        Assert.Equal("batch-123", updated1.ExecutedBatchId);
-        Assert.Equal("batch-123", updated2.ExecutedBatchId);
-    }
-
-    [Fact(Skip = "SQLite does not support DateTimeOffset in ORDER BY - works in PostgreSQL production")]
-    public async Task ResetPendingAllocationsAsync_RemovesUnexecuted()
-    {
-        // Arrange
-        var logger = Mock.Of<ILogger<AllocationService>>();
-        var service = new AllocationService(_dbContextFactory, logger);
-
-        await service.CreateAllocationAsync(
-            "store-reset", "invoice-r1", "BTC-LN", 100000, 20m, 50000m, "USD");
-        await service.CreateAllocationAsync(
-            "store-reset", "invoice-r2", "BTC-LN", 100000, 20m, 50000m, "USD");
-
-        // Act
-        var resetCount = await service.ResetPendingAllocationsAsync("store-reset");
-
-        // Assert
-        Assert.Equal(2, resetCount);
-        
-        var remaining = await service.GetPendingAllocationsAsync("store-reset");
-        Assert.Empty(remaining);
     }
 
     [Fact]
@@ -359,33 +278,6 @@ public class DatabaseIntegrationTests : IDisposable
         // Act & Assert
         await Assert.ThrowsAsync<DbUpdateException>(
             async () => await db.SaveChangesAsync());
-    }
-
-    #endregion
-
-    #region Concurrent Operations Tests
-
-    [Fact(Skip = "SQLite does not support DateTimeOffset in ORDER BY - works in PostgreSQL production")]
-    public async Task ConcurrentAllocationCreation_HandledByUniqueConstraint()
-    {
-        // Arrange
-        var logger = Mock.Of<ILogger<AllocationService>>();
-        var service = new AllocationService(_dbContextFactory, logger);
-
-        // Act - simulate concurrent creation (sequential in test, but tests the handling)
-        var task1 = service.CreateAllocationAsync(
-            "store-concurrent", "invoice-concurrent", "BTC-LN", 100000, 20m, 50000m, "USD");
-        var task2 = service.CreateAllocationAsync(
-            "store-concurrent", "invoice-concurrent", "BTC-LN", 200000, 30m, 60000m, "USD");
-
-        var results = await Task.WhenAll(task1, task2);
-
-        // Assert - both should return the same allocation
-        Assert.Equal(results[0].Id, results[1].Id);
-
-        // Verify only one was created
-        var allAllocations = await service.GetAllAllocationsAsync("store-concurrent");
-        Assert.Single(allAllocations);
     }
 
     #endregion

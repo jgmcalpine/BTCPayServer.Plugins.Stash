@@ -18,7 +18,7 @@ namespace BTCPayServer.Plugins.Stash.Services;
 /// 
 /// Supports mock mode for regtest testing via STASH_MOCK_BOLTZ=true environment variable.
 /// </summary>
-public class BoltzApiService
+public class BoltzApiService : IBoltzApiService
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly BTCPayServerEnvironment _environment;

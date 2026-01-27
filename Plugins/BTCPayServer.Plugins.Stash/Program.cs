@@ -63,8 +63,9 @@ public class StashPlugin : BaseBTCPayServerPlugin
         // Add services
         serviceCollection.AddSingleton<StashSettingsService>();
         serviceCollection.AddSingleton<AllocationService>();
+        serviceCollection.AddSingleton<IAddressValidator, AddressValidator>();
         serviceCollection.AddSingleton<BatchExecutionService>();
-        serviceCollection.AddSingleton<BoltzApiService>();
+        serviceCollection.AddSingleton<IBoltzApiService, BoltzApiService>();
 
         // Add mock Boltz server (only runs if enabled)
         if (mockBoltzEnabled)
