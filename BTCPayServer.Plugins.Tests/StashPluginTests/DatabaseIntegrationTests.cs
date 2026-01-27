@@ -432,7 +432,7 @@ public class TestablePluginDbContextFactory : PluginDbContextFactory
     private readonly DbContextOptions<PluginDbContext> _options;
 
     public TestablePluginDbContextFactory(DbContextOptions<PluginDbContext> options) 
-        : base(Microsoft.Extensions.Options.Options.Create(new BTCPayServer.Abstractions.Contracts.DatabaseOptions()))
+        : base(Microsoft.Extensions.Options.Options.Create(new BTCPayServer.Abstractions.Models.DatabaseOptions()))
     {
         _options = options;
     }
