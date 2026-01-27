@@ -21,12 +21,10 @@ public static class TestHelpers
     /// </summary>
     public static TestableBoltzApiService CreateBoltzApiService(
         MockHttpMessageHandler mockHttp,
-        ChainName network = default)
+        ChainName? network = null)
     {
-        if (network == default)
-            network = ChainName.Testnet;
-
-        return new TestableBoltzApiService(mockHttp.ToHttpClient(), network);
+        var effectiveNetwork = network ?? ChainName.Testnet;
+        return new TestableBoltzApiService(mockHttp.ToHttpClient(), effectiveNetwork);
     }
 
     /// <summary>
