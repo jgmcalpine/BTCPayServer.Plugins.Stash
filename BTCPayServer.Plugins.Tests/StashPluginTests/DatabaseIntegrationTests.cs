@@ -3,10 +3,19 @@ using System.Data.Common;
 using BTCPayServer.Plugins.Stash.Data;
 using BTCPayServer.Plugins.Stash.Data.Models;
 using BTCPayServer.Plugins.Stash.Services;
+using BTCPayServer.Services;
+using BTCPayServer.Services.Stores;
+using BTCPayServer.Services.Wallets;
+using BTCPayServer.Payments;
+using BTCPayServer.Payments.Lightning;
+using BTCPayServer.Configuration;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Moq;
+using NBitcoin;
+using NBXplorer;
 using Xunit;
 
 namespace BTCPayServer.Plugins.Tests.StashPluginTests;
@@ -369,20 +378,19 @@ public class DatabaseIntegrationTests : IDisposable
     /// </summary>
     private BatchExecutionService CreateMinimalBatchExecutionService()
     {
-        var mockEnvironment = new Mock<BTCPayServer.Configuration.BTCPayServerEnvironment>();
-        mockEnvironment.Setup(e => e.NetworkType).Returns(NBitcoin.ChainName.Regtest);
+        var mockEnvironment = new Mock<BTCPayServerEnvironment>();
+        mockEnvironment.Setup(e => e.NetworkType).Returns(ChainName.Regtest);
 
-        var mockStoreRepo = Mock.Of<BTCPayServer.Services.Stores.StoreRepository>();
-        var mockNetworkProvider = Mock.Of<BTCPayServer.BTCPayNetworkProvider>();
-        var mockExplorerProvider = Mock.Of<NBXplorer.ExplorerClientProvider>();
-        var mockWalletProvider = Mock.Of<BTCPayServer.Services.Wallets.BTCPayWalletProvider>();
-        var mockHandlers = Mock.Of<BTCPayServer.Payments.PaymentMethodHandlerDictionary>();
-        var mockFeeProvider = Mock.Of<BTCPayServer.Services.IFeeProviderFactory>();
+        var mockStoreRepo = Mock.Of<StoreRepository>();
+        var mockNetworkProvider = Mock.Of<BTCPayNetworkProvider>();
+        var mockExplorerProvider = Mock.Of<ExplorerClientProvider>();
+        var mockWalletProvider = Mock.Of<BTCPayWalletProvider>();
+        var mockHandlers = Mock.Of<PaymentMethodHandlerDictionary>();
+        var mockFeeProvider = Mock.Of<IFeeProviderFactory>();
         var mockBoltzApi = Mock.Of<IBoltzApiService>();
         var mockAddressValidator = Mock.Of<IAddressValidator>();
-        var mockLightningFactory = Mock.Of<BTCPayServer.Payments.Lightning.LightningClientFactoryService>();
-        var mockLightningOptions = Microsoft.Extensions.Options.Options.Create(
-            new BTCPayServer.Configuration.LightningNetworkOptions());
+        var mockLightningFactory = Mock.Of<LightningClientFactoryService>();
+        var mockLightningOptions = Options.Create(new LightningNetworkOptions());
         var mockLogger = Mock.Of<ILogger<BatchExecutionService>>();
 
         return new BatchExecutionService(
