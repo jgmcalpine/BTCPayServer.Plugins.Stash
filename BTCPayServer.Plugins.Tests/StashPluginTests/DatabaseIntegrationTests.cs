@@ -14,6 +14,7 @@ using BTCPayServer.Configuration;
 using BTCPayServer.Hosting;
 using BTCPayServer.Logging;
 using BTCPayServer.Plugins;
+using BTCPayServer.Plugins.Altcoins;
 using BTCPayServer.Plugins.Bitcoin;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Data.Sqlite;
@@ -460,7 +461,7 @@ public class DatabaseIntegrationTests : IDisposable
         var bootstrap = Startup.CreateBootstrap(conf);
         var services = new PluginServiceCollection(new ServiceCollection(), bootstrap);
         var plugins = new List<BaseBTCPayServerPlugin>() { new BitcoinPlugin() };
-        plugins.Add(new BTCPayServer.Plugins.Altcoins.AltcoinsPlugin());
+        plugins.Add(new AltcoinsPlugin());
 
         foreach (var p in plugins)
         {
@@ -473,7 +474,12 @@ public class DatabaseIntegrationTests : IDisposable
         services.AddSingleton(services.BootstrapServices.GetRequiredService<IConfiguration>());
         services.AddSingleton<BTCPayNetworkProvider>();
         var serviceProvider = services.BuildServiceProvider();
-        return serviceProvider.GetRequiredService<BTCPayNetworkProvider>();
+        var networkProvider = serviceProvider.GetService<BTCPayNetworkProvider>();
+        if (networkProvider == null)
+        {
+            throw new InvalidOperationException("Failed to create BTCPayNetworkProvider. Service registration may be incorrect.");
+        }
+        return networkProvider;
     }
 
     #endregion
