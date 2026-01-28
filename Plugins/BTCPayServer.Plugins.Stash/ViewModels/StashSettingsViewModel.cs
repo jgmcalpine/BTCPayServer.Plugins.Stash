@@ -41,7 +41,7 @@ public class StashSettingsViewModel
 
     [Display(Name = "Fee Block Target")]
     [Range(1, 144, ErrorMessage = "Block target must be between 1 and 144")]
-    public int FeeBlockTarget { get; set; } = 6;
+    public int FeeBlockTarget { get; set; } = 144;
 
     [Display(Name = "Use Tor for API calls")]
     public bool UseTor { get; set; } = true;

@@ -70,9 +70,9 @@ public class StashSettings
     public long MinimumBatchSats { get; set; } = 10000;
 
     /// <summary>
-    /// Fee block target for on-chain transactions (1 = next block, 6 = ~1 hour, etc.).
+    /// Fee block target for on-chain transactions (1 = next block, 6 = ~1 hour, 144 = ~1 day, etc.).
     /// </summary>
-    public int FeeBlockTarget { get; set; } = 6;
+    public int FeeBlockTarget { get; set; } = 144;
 
     /// <summary>
     /// Whether to route API requests through Tor for privacy.
