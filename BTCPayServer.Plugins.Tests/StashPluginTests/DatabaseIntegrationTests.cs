@@ -10,8 +10,10 @@ using BTCPayServer.Services.Wallets;
 using BTCPayServer.Payments;
 using BTCPayServer.Payments.Lightning;
 using BTCPayServer.Configuration;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -379,11 +381,35 @@ public class DatabaseIntegrationTests : IDisposable
     /// </summary>
     private BatchExecutionService CreateMinimalBatchExecutionService()
     {
-        var mockEnvironment = new Mock<BTCPayServerEnvironment>();
-        mockEnvironment.Setup(e => e.NetworkType).Returns(ChainName.Regtest);
+        // Create a concrete BTCPayServerEnvironment instance since NetworkType is not virtual
+        // and cannot be mocked with Moq Setup expressions
+        var mockWebHostEnvironment = Mock.Of<IWebHostEnvironment>(e => 
+            e.EnvironmentName == Environments.Development);
+        
+        // Mock BTCPayNetworkProvider with NetworkType getter
+        // Note: We use SetupGet instead of Setup to mock the property getter
+        var mockNetworkProvider = new Mock<BTCPayNetworkProvider>();
+        mockNetworkProvider.SetupGet(p => p.NetworkType).Returns(ChainName.Regtest);
+        
+        var mockTorServices = Mock.Of<TorServices>();
+        var mockBtcPayOptions = Mock.Of<BTCPayServerOptions>(o => o.CheatMode == false);
+        
+        // Create concrete instance - NetworkType will be set from provider.NetworkType in constructor
+        // Since we mocked the provider's NetworkType getter, this should work
+        var environment = new BTCPayServerEnvironment(
+            mockWebHostEnvironment,
+            mockNetworkProvider.Object,
+            mockTorServices,
+            mockBtcPayOptions);
+        
+        // Ensure NetworkType is set correctly (it's set in constructor from provider.NetworkType)
+        // If the mock didn't work, set it directly as a fallback
+        if (environment.NetworkType != ChainName.Regtest)
+        {
+            environment.NetworkType = ChainName.Regtest;
+        }
 
         var mockStoreRepo = Mock.Of<StoreRepository>();
-        var mockNetworkProvider = Mock.Of<BTCPayNetworkProvider>();
         var mockExplorerProvider = Mock.Of<ExplorerClientProvider>();
         var mockWalletProvider = Mock.Of<BTCPayWalletProvider>();
         var mockHandlers = Mock.Of<PaymentMethodHandlerDictionary>();
@@ -396,9 +422,9 @@ public class DatabaseIntegrationTests : IDisposable
 
         return new BatchExecutionService(
             _dbContextFactory,
-            mockEnvironment.Object,
+            environment,
             mockStoreRepo,
-            mockNetworkProvider,
+            mockNetworkProvider.Object,
             mockExplorerProvider,
             mockWalletProvider,
             mockHandlers,
