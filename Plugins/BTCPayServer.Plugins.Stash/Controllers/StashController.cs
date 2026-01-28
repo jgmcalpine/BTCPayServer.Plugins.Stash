@@ -129,40 +129,50 @@ public class StashController(
         }
 
         // Validate destination address based on type using network-aware validation
-        if (model.IsEnabled && model.DestinationType == StashDestinationType.ColdStorage)
+        // Validate whenever a cold storage address is provided, regardless of plugin enabled state
+        if (model.DestinationType == StashDestinationType.ColdStorage)
         {
-            if (string.IsNullOrWhiteSpace(model.DestinationAddress))
+            // Require address only if plugin is enabled
+            if (model.IsEnabled && string.IsNullOrWhiteSpace(model.DestinationAddress))
             {
                 ModelState.AddModelError(nameof(model.DestinationAddress), 
                     "Bitcoin destination address is required for cold storage mode.");
                 return View(model);
             }
 
-            // Use network-aware address validation
-            var addressValidation = batchExecutionService.ValidateBitcoinAddressForNetwork(model.DestinationAddress);
-            if (!addressValidation.IsValid)
+            // Validate address format and network compatibility if an address is provided
+            if (!string.IsNullOrWhiteSpace(model.DestinationAddress))
             {
-                ModelState.AddModelError(nameof(model.DestinationAddress), addressValidation.ErrorMessage!);
-                return View(model);
+                var addressValidation = batchExecutionService.ValidateBitcoinAddressForNetwork(model.DestinationAddress);
+                if (!addressValidation.IsValid)
+                {
+                    ModelState.AddModelError(nameof(model.DestinationAddress), addressValidation.ErrorMessage!);
+                    return View(model);
+                }
             }
         }
 
         // Validate Liquid address for Liquid Swap mode
-        if (model.IsEnabled && model.DestinationType == StashDestinationType.LiquidSwap)
+        // Validate whenever a Liquid address is provided, regardless of plugin enabled state
+        if (model.DestinationType == StashDestinationType.LiquidSwap)
         {
-            if (string.IsNullOrWhiteSpace(model.LiquidAddress))
+            // Require address only if plugin is enabled
+            if (model.IsEnabled && string.IsNullOrWhiteSpace(model.LiquidAddress))
             {
                 ModelState.AddModelError(nameof(model.LiquidAddress), 
                     "Liquid destination address is required for Liquid swap mode.");
                 return View(model);
             }
 
-            // Use network-aware validation (allows ert1/el1 for regtest)
-            var liquidValidation = batchExecutionService.ValidateLiquidAddressForNetwork(model.LiquidAddress);
-            if (!liquidValidation.IsValid)
+            // Validate address format and network compatibility if an address is provided
+            if (!string.IsNullOrWhiteSpace(model.LiquidAddress))
             {
-                ModelState.AddModelError(nameof(model.LiquidAddress), liquidValidation.ErrorMessage!);
-                return View(model);
+                var liquidValidation = batchExecutionService.ValidateLiquidAddressForNetwork(model.LiquidAddress);
+                if (!liquidValidation.IsValid)
+                {
+                    ModelState.AddModelError(nameof(model.LiquidAddress), liquidValidation.ErrorMessage!);
+                    return View(model);
+                }
             }
         }
 

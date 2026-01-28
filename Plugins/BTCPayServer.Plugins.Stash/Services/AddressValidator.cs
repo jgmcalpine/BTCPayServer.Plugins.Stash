@@ -1,8 +1,10 @@
 #nullable enable
+using System;
 using System.Text.RegularExpressions;
 using BTCPayServer.Plugins.Stash.Data.Models;
 using BTCPayServer.Services;
 using NBitcoin;
+using BTCPayServer;
 
 namespace BTCPayServer.Plugins.Stash.Services;
 
@@ -12,6 +14,7 @@ namespace BTCPayServer.Plugins.Stash.Services;
 public class AddressValidator : IAddressValidator
 {
     private readonly ChainName _networkType;
+    private readonly BTCPayNetworkProvider _networkProvider;
 
     // Bitcoin address regex patterns
     private static readonly Regex BtcMainnetAddressRegex = new(
@@ -44,18 +47,20 @@ public class AddressValidator : IAddressValidator
     /// <summary>
     /// Creates an AddressValidator for production use.
     /// </summary>
-    public AddressValidator(BTCPayServerEnvironment environment)
+    public AddressValidator(BTCPayServerEnvironment environment, BTCPayNetworkProvider networkProvider)
     {
         _networkType = environment.NetworkType;
+        _networkProvider = networkProvider;
     }
 
     /// <summary>
     /// Creates an AddressValidator with an explicit network type.
     /// Useful for testing without BTCPayServerEnvironment dependency.
     /// </summary>
-    public AddressValidator(ChainName networkType)
+    public AddressValidator(ChainName networkType, BTCPayNetworkProvider? networkProvider = null)
     {
         _networkType = networkType;
+        _networkProvider = networkProvider ?? throw new ArgumentNullException(nameof(networkProvider), "Network provider is required for address validation.");
     }
 
     /// <inheritdoc/>
@@ -73,45 +78,79 @@ public class AddressValidator : IAddressValidator
         if (ValidateXpub(address))
             return new AddressValidationResult(true, null);
 
-        // Determine which network the address belongs to
+        // Get the Bitcoin network for the current environment
+        var btcNetwork = _networkProvider.GetNetwork<BTCPayNetwork>("BTC");
+        if (btcNetwork == null)
+        {
+            return new AddressValidationResult(false, "Bitcoin network not available.");
+        }
+
+        var nbitcoinNetwork = btcNetwork.NBitcoinNetwork;
+
+        // Try to parse the address with NBitcoin to validate checksum and format
+        // First, try parsing with the expected network
+        BitcoinAddress? parsedAddress = null;
+        try
+        {
+            parsedAddress = BitcoinAddress.Create(address, nbitcoinNetwork);
+            // If parsing succeeds, the address is valid for this network
+            return new AddressValidationResult(true, null);
+        }
+        catch (FormatException)
+        {
+            // Address format is invalid or checksum is wrong
+        }
+
+        // If parsing failed, try to determine which network the address appears to belong to
+        // This helps provide a better error message
         var isMainnetAddress = BtcMainnetAddressRegex.IsMatch(address);
         var isTestnetAddress = BtcTestnetAddressRegex.IsMatch(address);
         var isRegtestAddress = BtcRegtestAddressRegex.IsMatch(address);
 
-        // Validate against current network
-        if (_networkType == ChainName.Mainnet)
+        // Try parsing with other networks to see if it's a network mismatch
+        if (_networkType != ChainName.Mainnet && isMainnetAddress)
         {
-            if (isMainnetAddress)
-                return new AddressValidationResult(true, null);
-            if (isTestnetAddress || isRegtestAddress)
+            try
+            {
+                BitcoinAddress.Create(address, Network.Main);
                 return new AddressValidationResult(false,
-                    $"This appears to be a testnet/regtest address, but you are running on {expectedNetworkName}. Please use a mainnet address (starting with bc1, 1, or 3).");
+                    $"This appears to be a mainnet address, but you are running on {expectedNetworkName}. Please use a {expectedNetworkName} address (starting with {GetAddressPrefixesForNetwork(_networkType)}).");
+            }
+            catch
+            {
+                // Invalid even for mainnet
+            }
         }
-        else if (_networkType == ChainName.Testnet)
+        else if (_networkType != ChainName.Testnet && isTestnetAddress)
         {
-            if (isTestnetAddress)
-                return new AddressValidationResult(true, null);
-            if (isMainnetAddress)
+            try
+            {
+                BitcoinAddress.Create(address, Network.TestNet);
                 return new AddressValidationResult(false,
-                    $"This appears to be a mainnet address, but you are running on {expectedNetworkName}. Please use a testnet address (starting with tb1, m, n, or 2).");
-            if (isRegtestAddress)
-                return new AddressValidationResult(false,
-                    $"This appears to be a regtest address, but you are running on {expectedNetworkName}. Please use a testnet address (starting with tb1, m, n, or 2).");
+                    $"This appears to be a testnet address, but you are running on {expectedNetworkName}. Please use a {expectedNetworkName} address (starting with {GetAddressPrefixesForNetwork(_networkType)}).");
+            }
+            catch
+            {
+                // Invalid even for testnet
+            }
         }
-        else if (_networkType == ChainName.Regtest)
+        else if (_networkType != ChainName.Regtest && isRegtestAddress)
         {
-            if (isRegtestAddress)
-                return new AddressValidationResult(true, null);
-            if (isMainnetAddress)
+            try
+            {
+                BitcoinAddress.Create(address, Network.RegTest);
                 return new AddressValidationResult(false,
-                    $"This appears to be a mainnet address, but you are running on {expectedNetworkName}. Please use a regtest address (starting with bcrt1, m, n, or 2).");
-            if (isTestnetAddress)
-                return new AddressValidationResult(false,
-                    $"This appears to be a testnet address, but you are running on {expectedNetworkName}. Please use a regtest address (starting with bcrt1, m, n, or 2).");
+                    $"This appears to be a regtest address, but you are running on {expectedNetworkName}. Please use a {expectedNetworkName} address (starting with {GetAddressPrefixesForNetwork(_networkType)}).");
+            }
+            catch
+            {
+                // Invalid even for regtest
+            }
         }
 
+        // Address format looks correct but checksum is invalid or address is malformed
         return new AddressValidationResult(false,
-            $"Invalid Bitcoin address format. Please enter a valid {expectedNetworkName} address.");
+            $"Invalid Bitcoin address. The address format appears correct but the checksum is invalid or the address is malformed. Please enter a valid {expectedNetworkName} address.");
     }
 
     /// <inheritdoc/>
@@ -204,5 +243,16 @@ public class AddressValidator : IAddressValidator
         if (network == ChainName.Regtest)
             return "regtest";
         return network.ToString().ToLowerInvariant();
+    }
+
+    private static string GetAddressPrefixesForNetwork(ChainName network)
+    {
+        if (network == ChainName.Mainnet)
+            return "bc1, 1, or 3";
+        if (network == ChainName.Testnet)
+            return "tb1, m, n, or 2";
+        if (network == ChainName.Regtest)
+            return "bcrt1, m, n, or 2";
+        return "a valid address";
     }
 }
