@@ -419,6 +419,7 @@ public class StashController(
         var (pendingSats, pendingFiat, pendingCount) = await allocationService.GetPendingTotalsAsync(storeId);
         var lifetimeStats = await batchExecutionService.GetLifetimeStatsAsync(storeId);
         var recentBatches = await batchExecutionService.GetBatchHistoryAsync(storeId, 5);
+        var recentAllocations = await allocationService.GetAllAllocationsAsync(storeId);
 
         // Get current exchange rate
         decimal currentRate = 0;
@@ -486,6 +487,16 @@ public class StashController(
                 executionType = b.ExecutionType.ToString(),
                 netSats = b.NetSats,
                 status = b.Status.ToString()
+            }),
+            recentAllocations = recentAllocations.Take(10).Select(a => new
+            {
+                id = a.Id,
+                invoiceId = a.InvoiceId,
+                settledAt = a.SettledAt.ToString("o"),
+                allocatedSats = a.AllocatedSats,
+                fiatValue = a.FiatValueAtReceipt,
+                fiatCurrency = a.FiatCurrency,
+                isExecuted = a.IsExecuted
             })
         });
     }

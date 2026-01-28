@@ -196,36 +196,38 @@ else
                 <h5 class="mb-0">Recent Batches</h5>
                 <a asp-action="Batches" asp-route-storeId="@storeId" class="btn btn-sm btn-link">View All</a>
             </div>
-            <div class="table-responsive">
-                <table class="table table-hover mb-0">
-                    <thead>
-                        <tr>
-                            <th>Date</th>
-                            <th>Type</th>
-                            <th>Amount</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var batch in Model.RecentBatches)
-                        {
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0" data-section="recent-batches">
+                        <thead>
                             <tr>
-                                <td>@batch.InitiatedAt.ToBrowserDate()</td>
-                                <td>
-                                    <span class="badge @(batch.ExecutionType == BatchExecutionType.ColdStorage ? "bg-info" : "bg-warning")">
-                                        @(batch.ExecutionType == BatchExecutionType.ColdStorage ? "Cold Storage" : "Liquid Swap")
-                                    </span>
-                                </td>
-                                <td>@batch.NetSats.ToString("N0") sats</td>
-                                <td>
-                                    <span class="badge @(batch.Status == BatchStatus.Completed ? "bg-success" : batch.Status == BatchStatus.Failed ? "bg-danger" : "bg-secondary")">
-                                        @batch.Status
-                                    </span>
-                                </td>
+                                <th>Date</th>
+                                <th>Type</th>
+                                <th>Amount</th>
+                                <th>Status</th>
                             </tr>
-                        }
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody>
+                            @foreach (var batch in Model.RecentBatches)
+                            {
+                                <tr>
+                                    <td>@batch.InitiatedAt.ToBrowserDate()</td>
+                                    <td>
+                                        <span class="badge @(batch.ExecutionType == BatchExecutionType.ColdStorage ? "bg-info" : "bg-warning")">
+                                            @(batch.ExecutionType == BatchExecutionType.ColdStorage ? "Cold Storage" : "Liquid Swap")
+                                        </span>
+                                    </td>
+                                    <td>@batch.NetSats.ToString("N0") sats</td>
+                                    <td>
+                                        <span class="badge @(batch.Status == BatchStatus.Completed ? "bg-success" : batch.Status == BatchStatus.Failed ? "bg-danger" : "bg-secondary")">
+                                            @batch.Status
+                                        </span>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     }
@@ -237,43 +239,45 @@ else
                 <h5 class="mb-0">Recent Allocations</h5>
                 <a asp-action="Allocations" asp-route-storeId="@storeId" class="btn btn-sm btn-link">View All</a>
             </div>
-            <div class="table-responsive">
-                <table class="table table-hover mb-0">
-                    <thead>
-                        <tr>
-                            <th>Date</th>
-                            <th>Invoice</th>
-                            <th>Allocated</th>
-                            <th>Value</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var alloc in Model.RecentAllocations)
-                        {
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0" data-section="recent-allocations">
+                        <thead>
                             <tr>
-                                <td>@alloc.SettledAt.ToBrowserDate()</td>
-                                <td>
-                                    <a href="/invoices/@alloc.InvoiceId" target="_blank">
-                                        @alloc.InvoiceId.Substring(0, Math.Min(8, alloc.InvoiceId.Length))...
-                                    </a>
-                                </td>
-                                <td>@alloc.AllocatedSats.ToString("N0") sats</td>
-                                <td>@alloc.FiatValueAtReceipt.ToString("N2") @alloc.FiatCurrency</td>
-                                <td>
-                                    @if (alloc.IsExecuted)
-                                    {
-                                        <span class="badge bg-success">Executed</span>
-                                    }
-                                    else
-                                    {
-                                        <span class="badge bg-warning">Pending</span>
-                                    }
-                                </td>
+                                <th>Date</th>
+                                <th>Invoice</th>
+                                <th>Allocated</th>
+                                <th>Value</th>
+                                <th>Status</th>
                             </tr>
-                        }
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody>
+                            @foreach (var alloc in Model.RecentAllocations)
+                            {
+                                <tr>
+                                    <td>@alloc.SettledAt.ToBrowserDate()</td>
+                                    <td>
+                                        <a href="/invoices/@alloc.InvoiceId" target="_blank">
+                                            @alloc.InvoiceId.Substring(0, Math.Min(8, alloc.InvoiceId.Length))...
+                                        </a>
+                                    </td>
+                                    <td>@alloc.AllocatedSats.ToString("N0") sats</td>
+                                    <td>@alloc.FiatValueAtReceipt.ToString("N2") @alloc.FiatCurrency</td>
+                                    <td>
+                                        @if (alloc.IsExecuted)
+                                        {
+                                            <span class="badge bg-success">Executed</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge bg-warning">Pending</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     }
@@ -290,6 +294,89 @@ else
             
             function formatDecimal(num, decimals = 2) {
                 return num.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+            }
+            
+            function formatDate(dateString) {
+                const date = new Date(dateString);
+                const now = new Date();
+                const diffMs = now - date;
+                const diffSecs = Math.floor(diffMs / 1000);
+                const diffMins = Math.floor(diffSecs / 60);
+                const diffHours = Math.floor(diffMins / 60);
+                const diffDays = Math.floor(diffHours / 24);
+                
+                if (diffSecs < 60) return `${diffSecs} seconds ago`;
+                if (diffMins < 60) return `${diffMins} minutes ago`;
+                if (diffHours < 24) return `${diffHours} hours ago`;
+                if (diffDays < 7) return `${diffDays} days ago`;
+                
+                return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            }
+            
+            function updateRecentBatchesTable(batches) {
+                const tbody = document.querySelector('[data-section="recent-batches"] tbody');
+                if (!tbody) return;
+                
+                if (!batches || batches.length === 0) {
+                    tbody.innerHTML = '';
+                    return;
+                }
+                
+                tbody.innerHTML = batches.map(batch => {
+                    const executionTypeClass = batch.executionType === 'ColdStorage' ? 'bg-info' : 'bg-warning';
+                    const executionTypeLabel = batch.executionType === 'ColdStorage' ? 'Cold Storage' : 'Liquid Swap';
+                    const statusClass = batch.status === 'Completed' ? 'bg-success' : batch.status === 'Failed' ? 'bg-danger' : 'bg-secondary';
+                    
+                    return `
+                        <tr>
+                            <td><time datetime="${batch.initiatedAt}" data-initial="localized">${formatDate(batch.initiatedAt)}</time></td>
+                            <td><span class="badge ${executionTypeClass}">${executionTypeLabel}</span></td>
+                            <td>${formatNumber(batch.netSats)} sats</td>
+                            <td><span class="badge ${statusClass}">${batch.status}</span></td>
+                        </tr>
+                    `;
+                }).join('');
+                
+                // Re-initialize date formatting if BTCPay's date formatting is available
+                if (typeof window.btcpay !== 'undefined' && window.btcpay.formatDate) {
+                    tbody.querySelectorAll('time').forEach(el => {
+                        window.btcpay.formatDate(el);
+                    });
+                }
+            }
+            
+            function updateRecentAllocationsTable(allocations) {
+                const tbody = document.querySelector('[data-section="recent-allocations"] tbody');
+                if (!tbody) return;
+                
+                if (!allocations || allocations.length === 0) {
+                    tbody.innerHTML = '';
+                    return;
+                }
+                
+                tbody.innerHTML = allocations.map(alloc => {
+                    const invoiceShort = alloc.invoiceId.substring(0, Math.min(8, alloc.invoiceId.length));
+                    const statusBadge = alloc.isExecuted 
+                        ? '<span class="badge bg-success">Executed</span>'
+                        : '<span class="badge bg-warning">Pending</span>';
+                    
+                    return `
+                        <tr>
+                            <td><time datetime="${alloc.settledAt}" data-initial="localized">${formatDate(alloc.settledAt)}</time></td>
+                            <td><a href="/invoices/${alloc.invoiceId}" target="_blank">${invoiceShort}...</a></td>
+                            <td>${formatNumber(alloc.allocatedSats)} sats</td>
+                            <td>${formatDecimal(alloc.fiatValue)} ${alloc.fiatCurrency}</td>
+                            <td>${statusBadge}</td>
+                        </tr>
+                    `;
+                }).join('');
+                
+                // Re-initialize date formatting if BTCPay's date formatting is available
+                if (typeof window.btcpay !== 'undefined' && window.btcpay.formatDate) {
+                    tbody.querySelectorAll('time').forEach(el => {
+                        window.btcpay.formatDate(el);
+                    });
+                }
             }
             
             async function refreshStats() {
@@ -333,6 +420,16 @@ else
                         if (totalStashedEl) totalStashedEl.textContent = `${formatNumber(data.lifetimeStats.totalSatsStashed)} sats`;
                         if (totalFiatEl) totalFiatEl.textContent = `${formatDecimal(data.lifetimeStats.totalFiatStashed)} ${data.fiatCurrency}`;
                         if (totalFeesEl) totalFeesEl.textContent = `${formatNumber(data.lifetimeStats.totalFeesPaid)} sats`;
+                    }
+                    
+                    // Update Recent Batches table (always update if table exists to keep in sync)
+                    if (data.recentBatches) {
+                        updateRecentBatchesTable(data.recentBatches);
+                    }
+                    
+                    // Update Recent Allocations table (always update if table exists to keep in sync)
+                    if (data.recentAllocations) {
+                        updateRecentAllocationsTable(data.recentAllocations);
                     }
                     
                 } catch (error) {
