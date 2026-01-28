@@ -10,15 +10,23 @@ using BTCPayServer.Services.Wallets;
 using BTCPayServer.Payments;
 using BTCPayServer.Payments.Lightning;
 using BTCPayServer.Configuration;
+using BTCPayServer.Hosting;
+using BTCPayServer.Logging;
+using BTCPayServer.Plugins;
+using BTCPayServer.Plugins.Bitcoin;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration.Memory;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
 using NBitcoin;
 using NBXplorer;
+using System.Collections.Generic;
 using Xunit;
 
 namespace BTCPayServer.Plugins.Tests.StashPluginTests;
@@ -382,32 +390,27 @@ public class DatabaseIntegrationTests : IDisposable
     private BatchExecutionService CreateMinimalBatchExecutionService()
     {
         // Create a concrete BTCPayServerEnvironment instance since NetworkType is not virtual
-        // and cannot be mocked with Moq Setup expressions
+        // and cannot be mocked with Moq Setup expressions. We'll set NetworkType directly
+        // after construction since it has a public setter.
         var mockWebHostEnvironment = Mock.Of<IWebHostEnvironment>(e => 
             e.EnvironmentName == Environments.Development);
         
-        // Mock BTCPayNetworkProvider with NetworkType getter
-        // Note: We use SetupGet instead of Setup to mock the property getter
-        var mockNetworkProvider = new Mock<BTCPayNetworkProvider>();
-        mockNetworkProvider.SetupGet(p => p.NetworkType).Returns(ChainName.Regtest);
+        // Create a concrete BTCPayNetworkProvider instance since NetworkType is not virtual
+        // and cannot be mocked. We use a minimal setup similar to UnitTestBase.CreateNetworkProvider
+        var networkProvider = CreateTestNetworkProvider(ChainName.Regtest);
         
         var mockTorServices = Mock.Of<TorServices>();
         var mockBtcPayOptions = Mock.Of<BTCPayServerOptions>(o => o.CheatMode == false);
         
-        // Create concrete instance - NetworkType will be set from provider.NetworkType in constructor
-        // Since we mocked the provider's NetworkType getter, this should work
+        // Create concrete instance - constructor reads provider.NetworkType (which is Regtest)
         var environment = new BTCPayServerEnvironment(
             mockWebHostEnvironment,
-            mockNetworkProvider.Object,
+            networkProvider,
             mockTorServices,
             mockBtcPayOptions);
         
-        // Ensure NetworkType is set correctly (it's set in constructor from provider.NetworkType)
-        // If the mock didn't work, set it directly as a fallback
-        if (environment.NetworkType != ChainName.Regtest)
-        {
-            environment.NetworkType = ChainName.Regtest;
-        }
+        // NetworkType should already be Regtest from the provider, but ensure it's set correctly
+        environment.NetworkType = ChainName.Regtest;
 
         var mockStoreRepo = Mock.Of<StoreRepository>();
         var mockExplorerProvider = Mock.Of<ExplorerClientProvider>();
@@ -424,7 +427,7 @@ public class DatabaseIntegrationTests : IDisposable
             _dbContextFactory,
             environment,
             mockStoreRepo,
-            mockNetworkProvider.Object,
+            networkProvider,
             mockExplorerProvider,
             mockWalletProvider,
             mockHandlers,
@@ -434,6 +437,42 @@ public class DatabaseIntegrationTests : IDisposable
             mockLightningFactory,
             mockLightningOptions,
             mockLogger);
+    }
+
+    /// <summary>
+    /// Creates a minimal BTCPayNetworkProvider for testing with the specified network type.
+    /// This is needed because NetworkType is not virtual and cannot be mocked.
+    /// </summary>
+    private static BTCPayNetworkProvider CreateTestNetworkProvider(ChainName networkType)
+    {
+        var conf = new ConfigurationRoot(new List<IConfigurationProvider>()
+        {
+            new MemoryConfigurationProvider(new MemoryConfigurationSource()
+            {
+                InitialData = new[] {
+                    new KeyValuePair<string, string>("chains", "*"),
+                    new KeyValuePair<string, string>("network", networkType.ToString())
+                }
+            })
+        });
+        
+        var bootstrap = Startup.CreateBootstrap(conf);
+        var services = new PluginServiceCollection(new ServiceCollection(), bootstrap);
+        var plugins = new List<BaseBTCPayServerPlugin>() { new BitcoinPlugin() };
+        plugins.Add(new BTCPayServer.Plugins.Altcoins.AltcoinsPlugin());
+
+        foreach (var p in plugins)
+        {
+            p.Execute(services);
+        }
+        
+        services.AddSingleton(services.BootstrapServices.GetRequiredService<SelectedChains>());
+        services.AddSingleton(services.BootstrapServices.GetRequiredService<NBXplorerNetworkProvider>());
+        services.AddSingleton(services.BootstrapServices.GetRequiredService<Logs>());
+        services.AddSingleton(services.BootstrapServices.GetRequiredService<IConfiguration>());
+        services.AddSingleton<BTCPayNetworkProvider>();
+        var serviceProvider = services.BuildServiceProvider();
+        return serviceProvider.GetRequiredService<BTCPayNetworkProvider>();
     }
 
     #endregion
