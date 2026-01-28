@@ -1,4 +1,4 @@
-name: BTCPay Plugin Tests (Unit + UI)
+name: BTCPay Plugin Tests (Unit Tests)
 
 on:
     push:
@@ -7,12 +7,8 @@ on:
         branches: [ "master" ]
 
 jobs:
-    build:
-        
+    test:
         runs-on: ubuntu-22.04
-        env:
-            CI: true
-            BTCPAY_SERVER_URL: http://localhost:14142
         
         steps:
             -   uses: actions/checkout@v4
@@ -31,47 +27,5 @@ jobs:
                 run: |
                     dotnet build BTCPayServer.Plugins.Stash.sln -maxcpucount:1 -p:StaticWebAssetsEnabled=false
 
-            -   name: Special commands - Running Config Builder to init plugins
-                run: |
-                    dotnet run --project ConfigBuilder
-                    
-            -   name: Cache Playwright browsers
-                uses: actions/cache@v4
-                id: playwright-cache
-                with:
-                    path: ~/.cache/ms-playwright
-                    key: ${{ runner.os }}-playwright-${{ hashFiles('**/BTCPayServer.Plugins.Tests.csproj') }}
-                    restore-keys: |
-                        ${{ runner.os }}-playwright-
-
-            -   name: Install Playwright CLI + browsers (full install)
-                if: steps.playwright-cache.outputs.cache-hit != 'true'
-                run: |
-                    dotnet tool install --global Microsoft.Playwright.CLI
-                    export PATH="$PATH:$HOME/.dotnet/tools"
-                    playwright install --with-deps
-
-            -   name: Install Playwright CLI only (cache hit)
-                if: steps.playwright-cache.outputs.cache-hit == 'true'
-                run: |
-                    dotnet tool install --global Microsoft.Playwright.CLI
-                    export PATH="$PATH:$HOME/.dotnet/tools"
-
-            -   name: Start Docker containers
-                env:
-                    # Enable BuildKit for faster builds and better layer caching within the run
-                    # Note: This does NOT persist cache between GitHub Actions runs (ephemeral runners)
-                    # but provides ~5-10s speed improvement from BuildKit's optimized build engine
-                    DOCKER_BUILDKIT: 1
-                    COMPOSE_DOCKER_CLI_BUILD: 1
-                run: docker compose -f "submodules/btcpayserver/BTCPayServer.Tests/docker-compose.yml" up -d dev --build
-
             -   name: Run unit tests
-                run: dotnet test BTCPayServer.Plugins.Tests --verbosity normal --filter "FullyQualifiedName~StashPluginTests"
-            
-            -   name: Run Playwright UI tests
-                run: dotnet test BTCPayServer.Plugins.Tests --verbosity normal --filter "Category=PlaywrightUITest"
-                continue-on-error: true  # Allow to pass even if no Playwright tests are enabled
-
-            -   name: Cleanup Docker
-                run: docker compose -f submodules/btcpayserver/BTCPayServer.Tests/docker-compose.yml down --volumes
+                run: dotnet test BTCPayServer.Plugins.Stash.Tests --verbosity normal
