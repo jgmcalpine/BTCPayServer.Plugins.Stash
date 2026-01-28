@@ -187,34 +187,36 @@
     </div>
     @if (Model.Allocations.Any())
     {
-        <div class="table-responsive">
-            <table class="table table-hover mb-0">
-                <thead>
-                    <tr>
-                        <th>Invoice</th>
-                        <th>Settled</th>
-                        <th>Allocated</th>
-                        <th>Cost Basis</th>
-                        <th>Value at Receipt</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var alloc in Model.Allocations)
-                    {
+        <div class="card-body">
+            <div class="table-responsive m-0">
+                <table class="table table-hover mb-0">
+                    <thead>
                         <tr>
-                            <td>
-                                <a href="/invoices/@alloc.InvoiceId" target="_blank">
-                                    @alloc.InvoiceId
-                                </a>
-                            </td>
-                            <td>@alloc.SettledAt.ToBrowserDate()</td>
-                            <td>@alloc.AllocatedSats.ToString("N0") sats</td>
-                            <td>@alloc.ExchangeRateAtReceipt.ToString("N2") @alloc.FiatCurrency/BTC</td>
-                            <td>@alloc.FiatValueAtReceipt.ToString("N2") @alloc.FiatCurrency</td>
+                            <th>Invoice</th>
+                            <th>Settled</th>
+                            <th>Allocated</th>
+                            <th>Cost Basis</th>
+                            <th>Value at Receipt</th>
                         </tr>
-                    }
-                </tbody>
-            </table>
+                    </thead>
+                    <tbody>
+                        @foreach (var alloc in Model.Allocations)
+                        {
+                            <tr>
+                                <td>
+                                    <a href="/invoices/@alloc.InvoiceId" target="_blank">
+                                        @alloc.InvoiceId
+                                    </a>
+                                </td>
+                                <td>@alloc.SettledAt.ToBrowserDate()</td>
+                                <td>@alloc.AllocatedSats.ToString("N0") sats</td>
+                                <td>@alloc.ExchangeRateAtReceipt.ToString("N2") @alloc.FiatCurrency/BTC</td>
+                                <td>@alloc.FiatValueAtReceipt.ToString("N2") @alloc.FiatCurrency</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
         </div>
     }
     else
