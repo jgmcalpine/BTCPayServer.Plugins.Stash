@@ -38,10 +38,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\submodules\btcpayserver\BTCPayServer\BTCPayServer.csproj" ExcludeAssets="runtime">
-      <Private>false</Private>
-      <GlobalPropertiesToRemove>StaticWebAssetsEnabled</GlobalPropertiesToRemove>
-    </ProjectReference>
+    <ProjectReference Include="..\..\submodules\btcpayserver\BTCPayServer\BTCPayServer.csproj"/>
   </ItemGroup>
 
 </Project>
