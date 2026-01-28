@@ -180,28 +180,56 @@ public class AddressValidator : IAddressValidator
         if (string.IsNullOrWhiteSpace(address))
             return new AddressValidationResult(false, "Liquid address is required.");
 
+        var expectedNetworkName = GetNetworkDisplayName(_networkType);
+
+        // Get the Liquid network for the current environment
+        var liquidNetwork = _networkProvider.GetNetwork<BTCPayNetwork>("LBTC");
+        if (liquidNetwork == null)
+        {
+            return new AddressValidationResult(false, "Liquid network not available.");
+        }
+
+        var nbitcoinNetwork = liquidNetwork.NBitcoinNetwork;
+        if (nbitcoinNetwork == null)
+        {
+            return new AddressValidationResult(false, "Liquid network configuration is invalid.");
+        }
+
+        // Try to parse the address with NBitcoin to validate checksum and format
+        // First, try parsing with the expected network
+        BitcoinAddress? parsedAddress = null;
+        try
+        {
+            parsedAddress = BitcoinAddress.Create(address, nbitcoinNetwork);
+            // If parsing succeeds, the address is valid for this network
+            return new AddressValidationResult(true, null);
+        }
+        catch (FormatException)
+        {
+            // Address format is invalid or checksum is wrong
+        }
+
+        // If parsing failed, try to determine which network the address appears to belong to
+        // This helps provide a better error message
         var isMainnetAddress = LiquidMainnetAddressRegex.IsMatch(address);
         var isTestnetAddress = LiquidTestnetAddressRegex.IsMatch(address);
 
-        if (_networkType == ChainName.Mainnet)
+        // Provide helpful error messages for network mismatches
+        if (_networkType == ChainName.Mainnet && isTestnetAddress)
         {
-            if (isMainnetAddress)
-                return new AddressValidationResult(true, null);
-            if (isTestnetAddress)
-                return new AddressValidationResult(false,
-                    "This appears to be a testnet Liquid address, but you are running on mainnet. Please use a mainnet Liquid address (starting with ex1, lq1, or VJL/VTp).");
+            return new AddressValidationResult(false,
+                $"This appears to be a testnet Liquid address, but you are running on mainnet. Please use a mainnet Liquid address (starting with {GetLiquidAddressPrefixesForNetwork(ChainName.Mainnet)}).");
         }
-        else // Testnet or Regtest
+        else if (_networkType != ChainName.Mainnet && isMainnetAddress)
         {
-            if (isTestnetAddress)
-                return new AddressValidationResult(true, null);
-            if (isMainnetAddress)
-                return new AddressValidationResult(false,
-                    "This appears to be a mainnet Liquid address, but you are running on testnet. Please use a testnet Liquid address (starting with tex1, tlq1, ert1, or el1).");
+            return new AddressValidationResult(false,
+                $"This appears to be a mainnet Liquid address, but you are running on {expectedNetworkName}. Please use a {expectedNetworkName} Liquid address (starting with {GetLiquidAddressPrefixesForNetwork(_networkType)}).");
         }
 
+        // Address format looks correct but checksum is invalid or address is malformed
+        // This catches cases where a character is deleted or the checksum is wrong
         return new AddressValidationResult(false,
-            "Invalid Liquid address format. Please enter a valid Liquid network address.");
+            $"Invalid Liquid address. The address format appears correct but the checksum is invalid or the address is malformed. Please enter a valid {expectedNetworkName} Liquid address (starting with {GetLiquidAddressPrefixesForNetwork(_networkType)}).");
     }
 
     /// <inheritdoc/>
@@ -254,5 +282,14 @@ public class AddressValidator : IAddressValidator
         if (network == ChainName.Regtest)
             return "bcrt1, m, n, or 2";
         return "a valid address";
+    }
+
+    private static string GetLiquidAddressPrefixesForNetwork(ChainName network)
+    {
+        if (network == ChainName.Mainnet)
+            return "ex1, lq1, or VJL/VTp";
+        if (network == ChainName.Testnet || network == ChainName.Regtest)
+            return "tex1, tlq1, ert1, or el1";
+        return "a valid Liquid address";
     }
 }
